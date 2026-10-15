@@ -123,14 +123,20 @@ test("图标契约：icon.ts 里的 data URI 与产物一致", () => {
   assert.equal(bundleUri[1], srcUri[1], "产物图标与 icon.ts 漂移");
 });
 
-test("家族一致性：图标与同族 poker-viewer 相同", () => {
-  const sibling = resolve(ROOT, "services", "poker-viewer", "client", "icon.ts");
-  if (!existsSync(sibling)) return; // 不在本仓库（独立发布）时跳过，不算失败
+test("家族一致性：图标与同族 dsh-connect-workbuddy 相同", () => {
+  // 家族图标源在 dsh-connect-workbuddy（同作者插件家族）；本插件与它逐字节一致。
+  const sibling = join(
+    process.env.LOCALAPPDATA ?? "",
+    "Programs", "DeepSeek Harness", "resources", "app.asar", "dsh",
+    "..", "..", "..", "profiles", "desktop", "node_modules",
+    "dsh-connect-workbuddy", "client", "icon.ts",
+  );
+  if (!existsSync(sibling)) return; // 家族插件不在本机时跳过，不算失败
   const theirs = readFileSync(sibling, "utf8");
   const a = iconSource.match(/'data:image\/png;base64,([A-Za-z0-9+/=]+)'/);
   const b = theirs.match(/'data:image\/png;base64,([A-Za-z0-9+/=]+)'/);
   assert.ok(a && b, "同族插件缺 data URI");
-  assert.equal(a[1], b[1], "家族图标漂移：与 poker-viewer 的图标不一致");
+  assert.equal(a[1], b[1], "家族图标漂移：与 dsh-connect-workbuddy 的图标不一致");
 });
 
 function statMs(path) {

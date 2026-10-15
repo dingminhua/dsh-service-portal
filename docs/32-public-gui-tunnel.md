@@ -19,7 +19,7 @@
 
 | 我想干的事 | 命令 |
 | :--- | :--- |
-| **在 DSH 设置页点按钮开关**（推荐） | 装 `dsh-poker-viewer` 插件 → 设置里打开「扑克外网入口」 |
+| **在 DSH 设置页点按钮开关**（推荐） | 装 `dsh-service-portal` 插件 → 设置里打开「对外服务门户」 |
 | 开外网访问（两个随机域名） | `python -X utf8 tools/start_public_gui.py` |
 | **一个域名 + 路径**（`/train/`、`/viewer/`） | `python -X utf8 tools/start_public_gui.py --single-domain` |
 | 只开某一个（train / viewer） | `python -X utf8 tools/start_public_gui.py --only viewer` |
@@ -28,20 +28,25 @@
 | 指定口令（不建议） | `--password '...'`（≥12 字符，否则拒绝启动） |
 | 指定 cloudflared / python | `--cloudflared <path>` / `--python <path>` |
 
-### DSH 插件：`dsh-poker-viewer`（2026-10-15）
+### DSH 插件：`dsh-service-portal`（门户根插件，2026-10-15）
 
-位置 `D:\DshProject\dsh-service-portal\services\poker-viewer`，以 DSH 的 **link 本地插件**方式安装
-（与 `dsh-ldvh` 同类）。它在设置页提供「扑克外网入口」一节：一键开启/关闭、
-显示连接地址与口令。
+本仓库根目录即插件本体（包名/id=`dsh-service-portal`），以 DSH 的 **link 本地插件**方式安装
+（与 `dsh-ldvh` 同类）。它在设置页提供「对外服务门户」一节：一键开启/关闭、
+显示连接地址与口令。**这是门户的通用功能，不绑定任何具体服务**——服务清单
+（`services.json`）决定开放什么；本插件的两个 GUI 只是内置默认清单。
 
 **它是启动器，不是第二份实现**：底层仍然调本仓库的 `tools/start_public_gui.py`，
-所以隧道/认证/路径分流只有一份实现、一套控制检验。理由与取舍见该插件 README。
+所以隧道/认证/路径分流只有一份实现、一套控制检验。理由与取舍见仓库 README。
 
 ```powershell
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
-& $dsh plugin --profile desktop add "link:D:/DshProject/dsh-service-portal/services/poker-viewer"
+& $dsh plugin --profile desktop add "link:D:/DshProject/dsh-service-portal"
 # 装完需要重启 DSH（插件在宿主进程里加载）
 ```
+
+> 迁移说明：2026-10-15 曾有专用子插件 `dsh-poker-viewer`（ld-rl-poker 外网开关），
+> 其功能已**吸收进根插件**成为通用门户能力，子插件目录已删除。若旧 profile 仍装着
+> `dsh-poker-viewer`，用 `dsh plugin --profile desktop remove dsh-poker-viewer` 移除。
 
 > **⚠ 2026-10-15 踩过的坑（启动致命错误）**：插件原先声明了
 > `dsh.client.platform = "web"`，但 `package.json` 的 `exports` 里**没有**
@@ -64,9 +69,9 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 | 方法 | 路径 | 作用 |
 | :--- | :--- | :--- |
-| GET | `/poker-viewer/api/status` | 状态：是否运行、模式、地址、口令、端点 |
-| POST | `/poker-viewer/api/start` | 启动（默认单域名+路径） |
-| POST | `/poker-viewer/api/stop` | 停止 |
+| GET | `/service-portal/api/status` | 状态：是否运行、模式、地址、口令、端点 |
+| POST | `/service-portal/api/start` | 启动（默认单域名+路径） |
+| POST | `/service-portal/api/stop` | 停止 |
 
 **两种模式的区别**：
 

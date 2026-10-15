@@ -78,14 +78,9 @@ git push origin vX.Y.Z
 
 ### 7. 发布到 npm
 
-在 `services/poker-viewer` 与本插件根目录分别发布（子插件与门户是**两个独立 npm 包**）：
-
 ```bash
 cd D:/DshProject/dsh-service-portal
-npm publish        # 根插件 dsh-service-portal
-
-cd D:/DshProject/dsh-service-portal/services/poker-viewer
-npm publish        # 子插件 dsh-poker-viewer（若也要发）
+npm publish        # dsh-service-portal
 ```
 
 > ⚠️ **发布前必须 `npm run build` 重建客户端产物**，并确认 `lib/client.js` 存在且

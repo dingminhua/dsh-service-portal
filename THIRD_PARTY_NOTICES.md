@@ -22,9 +22,11 @@
 | `dsh-connect-workbuddy` | <https://github.com/dingminhua/dsh-connect-workbuddy> | 插件家族品牌图标（`client/icon.ts` 内联的 64px data URI，逐字节相同）；设置卡片外观风格 | **MIT**（Copyright (c) 2026 LaoDing） |
 | `dsh-connect-trae` | <https://github.com/dingminhua/dsh-connect-trae> | `dsm-*` 卡片样式与 `row.*` 文案键约定（经 `dsh-subagent-default-model` 承继） | **MIT**（Copyright (c) 2026 LaoDing） |
 | `dsh-subagent-default-model` | <https://github.com/dingminhua/dsh-subagent-default-model> | 插件家族的卡片 CSS 与品牌图标基准 | **MIT**（Copyright (c) 2026 LaoDing） |
-| `dsh-poker-viewer` | 本仓库 `services/poker-viewer` | 子插件：ld-rl-poker 外网开关，与门户共享同一套客户端分发格式与启动器纪律 | **MIT**（Copyright (c) 2026 LaoDing） |
 | Cloudflare `cloudflared` | <https://github.com/cloudflare/cloudflared> | quick tunnel 二进制（随机 trycloudflare 域名）；不随本仓库分发 | **Apache-2.0**（Cloudflare） |
 | `dsh-pocket` | DeepSeek Harness 运行时 | 提供 `cloudflared.exe` 的常用安装位置（`~/.dsh/dsh-pocket/bin/`）；本仓库不依赖其隧道 | DeepSeek |
+
+> 迁移说明：专用子插件 `dsh-poker-viewer` 已不存在（2026-10-15 功能吸收进根插件、
+> 目录删除），故不再单列条目；其能力已并入本仓库（门户插件 + Python 工具）。
 
 ## 三、随包分发
 

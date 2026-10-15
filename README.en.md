@@ -174,8 +174,10 @@ $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-r
 - the "launcher, not a second implementation" rule: verified tunnel/auth implementations are reused,
   not rewritten inside plugins.
 
-`services/poker-viewer` is a **dedicated child plugin** in this repo (the ld-rl-poker external
-access switch) built on the same portal infrastructure.
+> Historically the portal feature lived in a dedicated child plugin `dsh-poker-viewer`
+> (the ld-rl-poker external access switch); on 2026-10-15 its functionality was **absorbed
+> into the root plugin** as a generic, manifest-driven portal (not bound to any specific
+> service), and the child plugin directory was removed.
 
 ## Not done yet
 

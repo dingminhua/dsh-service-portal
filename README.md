@@ -70,6 +70,9 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 装完**需要重启 DSH**（插件在宿主进程里加载）。
 
+> 若旧 profile 仍装有已删除的子插件 `dsh-poker-viewer`，先移除再装根插件：
+> `& $dsh plugin --profile desktop remove dsh-poker-viewer`。
+
 ## 配置（DSH 设置页）
 
 | 字段 | 默认 | 说明 |
@@ -176,7 +179,9 @@ $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-r
 - 手写 CommonJS 客户端分发格式（`window.__ModuleLoader__.load`），零构建依赖；
 - 「启动器，不是第二份实现」的复用纪律：隧道/认证等已完成并验收的实现不在插件里重写。
 
-`services/poker-viewer` 是本仓库内的**专用子插件**（ld-rl-poker 外网开关），使用同一套门户基础设施。
+> 历史上门户功能曾是专用子插件 `dsh-poker-viewer`（ld-rl-poker 外网开关）；2026-10-15
+> 已将其功能**吸收进根插件**成为通用门户能力（服务清单驱动，不绑定任何具体服务），
+> 子插件目录已删除。
 
 ## 未做
 
