@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""给 GUI 加随机口令 Basic Auth 的反向代理（cloudflared 隧道的公开入口）。
+"""给 GUI 加口令登录 + 会话 cookie 的反向代理（cloudflared 隧道的公开入口）。
 
 为什么需要这一层
 ----------------
@@ -11,13 +11,19 @@
 
 cloudflared quick tunnel 只能做「整站单目标转发」，本身**不能加密码**。
 一旦把 8810/8811 直接交给隧道，任何拿到那个随机域名的人都能操作训练。
-所以隧道必须指向本代理，由本代理校验 Basic Auth 之后再转发到上游 GUI：
+所以隧道必须指向本代理，由本代理校验口令之后再转发到上游 GUI：
 
     cloudflared --> 127.0.0.1:8890 (本代理) --> 127.0.0.1:8810 (配置台)
     cloudflared --> 127.0.0.1:8891 (本代理) --> 127.0.0.1:8811 (查看台)
 
 本模块只做「认证 + 转发」，**不改动 GUI 代码**，因此不影响既有
 ``check_config_gui`` / ``check_gpu_gui`` / ``check_viewer_industry_standard``。
+
+认证形态（2026-10-15 起）
+------------------------
+**只验口令，不要账号**：未登录访问返回一个自定义登录页（仅一个口令输入框），
+不触发浏览器原生 Basic Auth 弹框；口令正确则下发签名会话 cookie。
+细节与安全设计见 ``tools/portal_login.py`` 顶部。
 
 口令来源（优先级从高到低）
 --------------------------
@@ -31,13 +37,12 @@ CommandLine，所以 ``tools/start_public_gui.py`` 默认走第 2 条。
 用法
 ----
     python -X utf8 tools/tunnel_auth.py --listen 8890 --upstream 127.0.0.1:8810 \
-        --user poker --password-file C:\\path\\to\\secret.txt
+        --password-file C:\\path\\to\\secret.txt
 
     # 免认证健康探针（给启动脚本/检查用）：
     curl http://127.0.0.1:8890/_auth/health     ->  {"ok": true}
 """
 import argparse
-import base64
 import hmac
 import http.client
 import json
@@ -47,8 +52,24 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# 口令长度下限；随机口令由 gen_password() 生成，远高于此值。
-MIN_PASSWORD_LEN = 12
+from portal_login import (  # noqa: E402  （同目录，脚本方式运行时靠 sys.path[0]）
+    DEFAULT_SESSION_TTL,
+    HEALTH_PATH,
+    LOGIN_PATH,
+    LOGOUT_PATH,
+    clear_cookie_header,
+    gen_password,
+    gen_secret,
+    login_page_html,
+    make_session,
+    password_matches,
+    read_session_cookie,
+    read_token,
+    session_cookie_header,
+    session_valid,
+    unauthorized_html,
+    validate_password,
+)
 # 转发上游的响应头白名单（其余丢弃，且 Content-Length 一律按实际字节重写）。
 _FORWARD_RESPONSE_HEADERS = (
     "content-type", "cache-control", "last-modified", "etag",
@@ -60,22 +81,6 @@ _SKIP_REQUEST_HEADERS = (
     "content-length", "transfer-encoding", "expect", "proxy-authorization",
 )
 HEALTH_PATH = "/_auth/health"
-
-
-def gen_password(nbytes=12):
-    """生成随机口令（默认 16 字符 URL-safe）。"""
-    return secrets.token_urlsafe(nbytes)
-
-
-def validate_password(password):
-    """口令门槛。返回 None 或抛 ValueError（调用方决定退出码）。"""
-    if not password or not password.strip():
-        raise ValueError("拒绝启动：公开入口必须设置非空口令")
-    if len(password.strip()) < MIN_PASSWORD_LEN:
-        raise ValueError(
-            "拒绝启动：口令至少 %d 字符（当前 %d 字符）"
-            % (MIN_PASSWORD_LEN, len(password.strip())))
-    return True
 
 
 def parse_upstream(text):
@@ -94,7 +99,7 @@ def parse_upstream(text):
 
 
 class TunnelAuthHandler(BaseHTTPRequestHandler):
-    """Basic Auth 校验通过后，把请求原样转发到上游 GUI。"""
+    """口令登录（会话 cookie）校验通过后，把请求原样转发到上游 GUI。"""
 
     protocol_version = "HTTP/1.1"
     server_version = "tunnel-auth"
@@ -103,7 +108,6 @@ class TunnelAuthHandler(BaseHTTPRequestHandler):
     # 由 make_server() 在子类上注入
     up_host = "127.0.0.1"
     up_port = 8810
-    username = "poker"
     password = ""
     upstream_timeout = 60.0
     # 路径前缀剥离（可选）：挂到 https://<域名>/train/ 时该值为 "/train"。
@@ -122,44 +126,88 @@ class TunnelAuthHandler(BaseHTTPRequestHandler):
                          % (self.address_string(), fmt % args))
         sys.stderr.flush()
 
-    # ---- 认证 ----
-    def _authorized(self):
-        header = self.headers.get("Authorization", "")
-        if not header.startswith("Basic "):
-            return False
-        try:
-            raw = base64.b64decode(header[6:].strip(), validate=True)
-            decoded = raw.decode("utf-8", "strict")
-        except Exception:
-            return False
-        if ":" not in decoded:
-            return False
-        user, _, password = decoded.partition(":")
-        # 两个比较都做（不短路），避免用户名/口令的时序差异。
-        ok_user = hmac.compare_digest(
-            user.encode("utf-8"), self.username.encode("utf-8"))
-        ok_pass = hmac.compare_digest(
-            password.encode("utf-8"), self.password.encode("utf-8"))
-        return bool(ok_user & ok_pass)
+    # ---- 认证（口令登录 + 签名会话 cookie，无账号）----
+    # 由 make_handler() 在子类上注入：
+    password = ""
+    secret = b""
+    session_ttl = DEFAULT_SESSION_TTL
+    # cookie 是否带 Secure。外网入口恒为 https（trycloudflare）；本机 http
+    # 调试/控制检验时置 False，否则浏览器不会回传 cookie。
+    cookie_secure = True
 
-    def _unauthorized(self):
-        body = ("401 Unauthorized：该入口需要 Basic Auth 凭据。\n"
-                "账号由 tools/start_public_gui.py 生成，见其凭据 JSON。\n").encode("utf-8")
-        self.send_response(401)
-        # 没有这个头，浏览器不会弹出密码框（只在 HTML 里报 401）。
-        self.send_header("WWW-Authenticate",
-                         'Basic realm="dsh-service-portal", charset="UTF-8"')
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+    def _authorized(self):
+        """会话 cookie 有效即视为已登录。**不再有账号字段。**"""
+        token = read_session_cookie(self.headers.get("Cookie", ""))
+        return session_valid(token, self.secret)
+
+    def _read_body(self):
+        declared = self.headers.get("Content-Length")
+        if not declared:
+            return b""
+        try:
+            size = int(declared)
+        except ValueError:
+            return b""
+        return self.rfile.read(size) if size > 0 else b""
+
+    def _send_html(self, status, body, extra_headers=()):
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Robots-Tag", "noindex, nofollow")
+        for key, value in extra_headers:
+            self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def _login_page(self, error=None, status=200, extra_headers=()):
+        """未登录 / 口令错误时给出的登录页（不触发浏览器原生弹框）。"""
+        body = login_page_html(error=error)
+        self._send_html(status, body, extra_headers)
+
+    def _redirect(self, location):
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        return None
+
+    def _handle_login(self):
+        """POST 口令 -> 校验 -> 下发会话 cookie。"""
+        body = self._read_body()
+        content_type = self.headers.get("Content-Type", "")
+        candidate = read_token({"body_bytes": body}, content_type)
+        if candidate is None:
+            return self._login_page("提交格式不正确，请重新输入口令。", status=400)
+        if not password_matches(candidate, self.password):
+            # 失败一律同一页面同一文案：不给任何可用于区分原因的差异。
+            return self._login_page("口令错误，请重试。", status=401)
+        token = make_session(self.secret, self.session_ttl)
+        # 303 让浏览器转成 GET 落到根路径；Set-Cookie 随同一响应下发。
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header(
+            "Set-Cookie",
+            session_cookie_header(token, self.session_ttl,
+                                  secure=self.cookie_secure))
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        return None
+
+    def _handle_logout(self):
+        self._send_html(200, login_page_html(error="已退出，请重新输入口令。"),
+                        extra_headers=[("Set-Cookie", clear_cookie_header())])
 
     def _health(self):
         body = json.dumps({"ok": True}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -207,14 +255,6 @@ class TunnelAuthHandler(BaseHTTPRequestHandler):
             return (host, port, rest + query)
         return (self.up_host, self.up_port, self._upstream_path())
 
-    def _send_html(self, status, body):
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
-
     def _bad_gateway(self, reason, host=None, port=None):
         body = ("502 Bad Gateway：上游 %s:%d 不可达 —— %s\n"
                 % (host or self.up_host, port or self.up_port, reason)).encode("utf-8")
@@ -248,22 +288,40 @@ class TunnelAuthHandler(BaseHTTPRequestHandler):
 
     # ---- 转发 ----
     def _proxy(self):
-        # 只有健康探针免认证（启动脚本靠它判定代理存活）；其余一律先认证。
-        if self.path.split("?", 1)[0] == HEALTH_PATH:
+        path_only = self.path.split("?", 1)[0]
+
+        # 1) 健康探针：免认证，永远由本代理自己答（启动脚本靠它判定存活）。
+        if path_only == HEALTH_PATH:
             return self._health()
+
+        # 2) 登录/登出：认证层自己的路由，**不转发给上游**。
+        #    放在认证判断之前，否则未登录的人打不开登录页。
+        if path_only == LOGIN_PATH:
+            if self.command == "POST":
+                return self._handle_login()
+            # GET 登录页：已登录就直接回根路径，省一次手动跳转。
+            if self._authorized():
+                return self._redirect("/")
+            return self._login_page()
+        if path_only == LOGOUT_PATH:
+            return self._handle_logout()
 
         host, port, target_path = self._resolve_target()
         if target_path == HEALTH_PATH:
             return self._health()
 
+        # 3) 认证在转发之前：未登录请求绝不触达上游，也绝不泄露上游存在与否。
         if not self._authorized():
-            # 认证在转发之前：未授权请求绝不触达上游。
-            return self._unauthorized()
+            # 用 200 + 登录页，不用 401：401 的语义是「需要 WWW-Authenticate
+            # 质询」，而我们刻意不发那个头（避免浏览器原生弹框）。用 401 会让
+            # 中间的代理/CDN 或某些浏览器把它当成失败页处理。
+            # 「口令错误」才是 401（见 _handle_login）。
+            return self._login_page(status=200)
 
         if target_path is None:
             # mounts 模式下未匹配任何前缀：只有根路径给落地页，其余一律 404
             # （不能拿落地页兜底未知前缀，否则拼错的路径会"看起来能用"）。
-            if self.landing_html is not None and self.path.split("?", 1)[0] in ("/", ""):
+            if self.landing_html is not None and path_only in ("/", ""):
                 return self._send_html(200, self.landing_html)
             return self._send_html(404, b"404 Not Found\n")
 
@@ -354,14 +412,22 @@ def parse_mounts(text):
     return tuple(mounts)
 
 
-def make_handler(up_host, up_port, username, password, timeout=60.0,
-                 strip_prefix="", mounts=(), landing_html=None):
-    """构造绑定了上游/凭据的 Handler 子类（避免用全局可变状态）。"""
+def make_handler(up_host, up_port, password, timeout=60.0,
+                 strip_prefix="", mounts=(), landing_html=None,
+                 secret=None, session_ttl=DEFAULT_SESSION_TTL,
+                 cookie_secure=True):
+    """构造绑定了上游/口令的 Handler 子类（避免用全局可变状态）。
+
+    ``secret=None`` 时自动生成一次性会话密钥 —— 每次进程启动都不同，
+    重启门户即全体会话作废（见 portal_login 的安全设计第 3 条）。
+    """
     return type("BoundTunnelAuthHandler", (TunnelAuthHandler,), {
         "up_host": up_host,
         "up_port": int(up_port),
-        "username": username,
         "password": password,
+        "secret": secret if secret is not None else gen_secret(),
+        "session_ttl": int(session_ttl),
+        "cookie_secure": bool(cookie_secure),
         "upstream_timeout": float(timeout),
         "strip_prefix": normalise_prefix(strip_prefix),
         "mounts": tuple(mounts),
@@ -369,12 +435,15 @@ def make_handler(up_host, up_port, username, password, timeout=60.0,
     })
 
 
-def make_server(listen_port, up_host, up_port, username, password,
+def make_server(listen_port, up_host, up_port, password,
                 listen_host="127.0.0.1", timeout=60.0, strip_prefix="",
-                mounts=(), landing_html=None):
+                mounts=(), landing_html=None, secret=None,
+                session_ttl=DEFAULT_SESSION_TTL, cookie_secure=True):
     """起一个已配好的 ThreadingHTTPServer（listen_port=0 时自动分配端口）。"""
-    handler = make_handler(up_host, up_port, username, password, timeout,
-                           strip_prefix, mounts, landing_html)
+    handler = make_handler(up_host, up_port, password, timeout,
+                           strip_prefix, mounts, landing_html,
+                           secret=secret, session_ttl=session_ttl,
+                           cookie_secure=cookie_secure)
     return ThreadingHTTPServer((listen_host, int(listen_port)), handler)
 
 
@@ -390,14 +459,13 @@ def resolve_password(args):
 
 def build_parser():
     ap = argparse.ArgumentParser(
-        description="给 GUI 加随机口令 Basic Auth 的反向代理（cloudflared 隧道入口）")
+        description="给 GUI 加「口令登录」的反向代理（cloudflared 隧道入口，无需账号）")
     ap.add_argument("--listen", type=int, default=8890,
                     help="本代理监听端口（只绑 127.0.0.1，默认 8890）")
     ap.add_argument("--upstream", default="127.0.0.1:8810",
                     help="上游 GUI，host:port（默认 127.0.0.1:8810 配置台）")
-    ap.add_argument("--user", default="poker", help="Basic Auth 用户名（默认 poker）")
     ap.add_argument("--password", default="",
-                    help="Basic Auth 口令；仅调试用，正式走 --password-file 或环境变量")
+                    help="访问口令；仅调试用，正式走 --password-file 或环境变量")
     ap.add_argument("--password-file", default=None,
                     help="从文件读取口令（推荐，口令不进入命令行）")
     ap.add_argument("--strip-prefix", default="",
@@ -406,6 +474,10 @@ def build_parser():
                     help="多挂载点，如 '/train=127.0.0.1:8810,/viewer=127.0.0.1:8811'"
                          "（一个域名 + 多个路径；给定时 --upstream 仅作兜底）")
     ap.add_argument("--timeout", type=float, default=60.0, help="上游超时秒数")
+    ap.add_argument("--session-ttl", type=int, default=DEFAULT_SESSION_TTL,
+                    help="登录会话有效期秒数（默认 %d）" % DEFAULT_SESSION_TTL)
+    ap.add_argument("--insecure-cookie", action="store_true",
+                    help="会话 cookie 不带 Secure（仅供本机 http 调试；外网必须保持默认）")
     return ap
 
 
@@ -423,10 +495,6 @@ def main(argv=None):
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    if not args.user.strip():
-        print("拒绝启动：--user 不能为空", file=sys.stderr)
-        return 2
-
     try:
         mounts = parse_mounts(args.mounts)
     except ValueError as exc:
@@ -443,19 +511,23 @@ def main(argv=None):
             "<title>dsh-service-portal 对外服务门户</title></head><body"
             " style=\"font-family:system-ui;background:#121212;color:#eee;"
             "padding:2rem\"><h1>dsh-service-portal 对外服务门户</h1>"
-            "<p>需要 Basic Auth 才能访问下列服务。</p><ul>%s</ul>"
+            "<p>需要口令登录才能访问下列服务。</p><ul>%s</ul>"
             "</body></html>" % rows).encode("utf-8")
 
-    server = make_server(args.listen, up_host, up_port, args.user.strip(),
-                         password, timeout=args.timeout,
+    server = make_server(args.listen, up_host, up_port, password,
+                         timeout=args.timeout,
                          strip_prefix=args.strip_prefix,
-                         mounts=mounts, landing_html=landing)
+                         mounts=mounts, landing_html=landing,
+                         session_ttl=args.session_ttl,
+                         cookie_secure=not args.insecure_cookie)
     host, port = server.server_address[0], server.server_address[1]
     prefix = normalise_prefix(args.strip_prefix)
     print("认证代理已启动：http://%s:%d%s/  ->  http://%s:%d/"
           % (host, port, prefix, up_host, up_port))
-    print("  用户名: %s" % args.user.strip())
-    print("  口令  : 已设置（%d 字符，不回显）" % len(password))
+    print("  登录方式: 只需口令（%s%s）"
+          % (LOGIN_PATH, "，本机调试 cookie 不带 Secure" if args.insecure_cookie else ""))
+    print("  口令    : 已设置（%d 字符，不回显）" % len(password))
+    print("  会话有效期: %d 秒" % args.session_ttl)
     if prefix:
         print("  挂载前缀: %s（请求 %s/api/x → 上游 /api/x）" % (prefix, prefix))
     for mount_prefix, mount_host, mount_port in mounts:

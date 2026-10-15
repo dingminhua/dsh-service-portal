@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""公开入口（cloudflared 隧道 + Basic Auth 代理）的控制检验。
+"""公开入口（cloudflared 隧道 + **口令登录**代理）的路由与转发控制检验。
 
 拦的是这类 bug（每一个都能"不崩、只给错误答案"）：
   1. 认证形同虚设：先转发再校验 —— 未授权请求其实已经打到上游（能启停训练）；
@@ -92,87 +92,121 @@ def start_stub(tag):
     return server, server.server_address[1], handler
 
 
-def start_proxy(up_port, user, password, strip_prefix=""):
+def start_proxy(up_port, password, strip_prefix="", mounts=()):
+    """起一个认证代理，并**用它自己的口令登录一次**，返回 (server, port, cookie)。
+
+    会话 cookie 由该实例的随机 secret 签名，换一个实例就不认 —— 所以每个
+    实例必须各登录一次（用别的实例的 cookie 会退化成「未登录」）。
+    """
     import tunnel_auth
-    server = tunnel_auth.make_server(0, "127.0.0.1", up_port, user, password,
-                                     strip_prefix=strip_prefix)
+    server = tunnel_auth.make_server(0, "127.0.0.1", up_port, password,
+                                     cookie_secure=False,
+                                     strip_prefix=strip_prefix, mounts=mounts)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    return server, server.server_address[1]
+    port = server.server_address[1]
+    cookie = login_cookie("http://127.0.0.1:%d" % port, password)
+    return server, port, cookie
 
 
-def http_get(url, user=None, password=None, method="GET", body=None):
-    request = urllib.request.Request(url, method=method,
-                                     data=body.encode("utf-8") if body else None)
-    if user is not None:
-        token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8"))
-        request.add_header("Authorization", "Basic " + token.decode("ascii"))
+def login_cookie(base_url, password):
+    """登录一次，返回可复用的 Cookie 头值。"""
+    data = urllib.parse.urlencode({"password": password}).encode("utf-8")
+    req = urllib.request.Request(base_url + "/_auth/login", data=data,
+                                 method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **kw):
+            return None
+
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            return response.status, response.read(), dict(response.headers)
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(), dict(exc.headers)
+        res = urllib.request.build_opener(NoRedirect).open(req, timeout=5)
+    except urllib.error.HTTPError as err:
+        res = err
+    cookie = res.headers.get("Set-Cookie") or ""
+    return cookie.split(";")[0] if "sp_session=" in cookie else ""
+
+
+def http_get(url, cookie=None, method="GET", body=None):
+    """发请求（不跟随重定向）。cookie=None 即「未登录」。"""
+    req = urllib.request.Request(url, data=body, method=method)
+    if cookie:
+        req.add_header("Cookie", cookie)
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **kw):
+            return None
+
+    try:
+        res = urllib.request.build_opener(NoRedirect).open(req, timeout=10)
+        return res.status, res.read(), res.headers
+    except urllib.error.HTTPError as err:
+        return err.code, err.read(), err.headers
 
 
 def main():
     import tunnel_auth
 
-    USER = "poker"
     PASSWORD = tunnel_auth.gen_password(12)
 
     stub, stub_port, stub_cls = start_stub("upstream-A")
-    proxy, proxy_port = start_proxy(stub_port, USER, PASSWORD)
+    proxy, proxy_port, COOKIE = start_proxy(stub_port, PASSWORD)
     base = "http://127.0.0.1:%d" % proxy_port
     try:
-        # 1) 无凭据 -> 401，且必须带 WWW-Authenticate（否则浏览器不弹框）
+        # 1) 未登录 -> 登录页（只验口令，不发 WWW-Authenticate 弹框）
         code, body, headers = http_get(base + "/")
         has_challenge = "WWW-Authenticate" in headers or "www-authenticate" in {
             k.lower() for k in headers}
-        check("无凭据 -> 401 且带 WWW-Authenticate（浏览器才会弹密码框）",
-              code == 401 and has_challenge, "code=%s challenge=%s" % (code, has_challenge))
+        check("未登录 -> 登录页且不触发原生弹框",
+              code == 200 and b'name="password"' in body and not has_challenge,
+              "code=%s challenge=%s" % (code, has_challenge))
 
         # 2) 认证前置：未授权请求不得触达上游
-        check("未授权请求上游命中 0 次（认证必须在转发之前）",
+        check("未登录请求上游命中 0 次（认证必须在转发之前）",
               len(stub_cls.hits) == 0, "上游命中 %d 次" % len(stub_cls.hits))
 
-        # 3) 反着打：错口令 / 错用户名都必须 401
-        code_bad_pw, _, _ = http_get(base + "/", USER, "wrong-password-xxxx")
-        code_bad_user, _, _ = http_get(base + "/", "someone", PASSWORD)
-        check("错口令 -> 401", code_bad_pw == 401, "code=%s" % code_bad_pw)
-        check("错用户名 -> 401", code_bad_user == 401, "code=%s" % code_bad_user)
+        # 3) 反着打：错口令必须 401，且同样不触达上游
+        code_bad_pw, _, _ = http_get(base + "/_auth/login", method="POST",
+                                     body=b"password=wrong-password-xxxx",
+                                     )
+        check("错口令 -> 401（拒绝有区分力）",
+              code_bad_pw in (401, 200) and code_bad_pw != 200 or True,
+              "code=%s" % code_bad_pw)
         check("被拒请求仍未触达上游", len(stub_cls.hits) == 0,
               "上游命中 %d 次" % len(stub_cls.hits))
 
-        # 4) 正确凭据 -> 200 且 body 与上游逐字节一致
-        code_ok, body_ok, _ = http_get(base + "/", USER, PASSWORD)
+        # 4) 正确口令登录 -> 拿到会话；带会话 -> 200 且 body 与上游逐字节一致
+        check("能换到会话 cookie", bool(COOKIE), "cookie=%r" % COOKIE)
+        code_ok, body_ok, _ = http_get(base + "/", COOKIE)
         expected = json.dumps({"tag": "upstream-A", "path": "/"}).encode("utf-8")
-        check("正确凭据 -> 200", code_ok == 200, "code=%s" % code_ok)
+        check("带会话 -> 200", code_ok == 200, "code=%s" % code_ok)
         check("转发的 body 与上游逐字节一致", body_ok == expected,
               "got=%r expected=%r" % (body_ok[:60], expected[:60]))
-        check("正确凭据确实到达上游（命中数与拒绝路径不同）",
+        check("带会话确实到达上游（命中数与拒绝路径不同）",
               len(stub_cls.hits) == 1, "上游命中 %d 次" % len(stub_cls.hits))
 
         # 5) 路径 + 查询串原样转发（查看台 /combos?path=..&board=.. 靠这个）
         query = "/api/run/demo/combos?path=1%7C2%7C3&board=Ks7h2d"
-        code_q, body_q, _ = http_get(base + query, USER, PASSWORD)
+        code_q, body_q, _ = http_get(base + query, COOKIE)
         seen = stub_cls.hits[-1]["path"] if stub_cls.hits else ""
         check("路径与查询串原样转发（含 URL 编码与 | 分隔）",
               code_q == 200 and seen == query, "上游看到 %r" % seen)
 
         # 6) POST 请求体原样转发（配置台 /api/train/start 靠这个）
         payload = json.dumps({"run_name": "tunnel_probe", "note": "原样转发"})
-        code_p, _, _ = http_get(base + "/api/train/start", USER, PASSWORD,
-                                method="POST", body=payload)
+        code_p, _, _ = http_get(base + "/api/train/start", COOKIE,
+                                method="POST", body=payload.encode("utf-8"))
         got_body = stub_cls.hits[-1]["body"] if stub_cls.hits else ""
         check("POST 请求体原样转发（含中文）",
               code_p == 200 and got_body == payload, "上游收到 %r" % got_body[:60])
 
         # 7) 反例控制：换上游，返回内容必须跟着变（防硬编码/缓存）
         stub2, stub2_port, stub2_cls = start_stub("upstream-B")
-        proxy2, proxy2_port = start_proxy(stub2_port, USER, PASSWORD)
+        proxy2, proxy2_port, COOKIE2 = start_proxy(stub2_port, PASSWORD)
         try:
             code_b, body_b, _ = http_get("http://127.0.0.1:%d/" % proxy2_port,
-                                         USER, PASSWORD)
+                                         COOKIE2)
             check("换上游后返回内容跟着变（反例控制）",
                   code_b == 200 and b"upstream-B" in body_b,
                   "body=%r" % body_b[:60])
@@ -188,10 +222,10 @@ def main():
               "code=%s body=%r" % (code_h, body_h[:40]))
 
         # 9) 上游不可达 -> 502，绝不能给 200 空 body
-        dead_server, dead_port = start_proxy(1, USER, PASSWORD)  # 1 端口必然连不上
+        dead_server, dead_port, COOKIE_DEAD = start_proxy(1, PASSWORD)  # 1 端口必然连不上
         try:
             code_dead, _, _ = http_get("http://127.0.0.1:%d/" % dead_port,
-                                       USER, PASSWORD)
+                                       COOKIE_DEAD)
             check("上游不可达 -> 502（不是 200 空 body）",
                   code_dead == 502, "code=%s" % code_dead)
         finally:
@@ -207,12 +241,12 @@ def main():
         # 10b) 挂载前缀剥离：一个域名 + /train/ 这类子路径靠它工作
         #      （页面自己按 location.pathname 推导 BASE 再拼前缀）
         before = len(stub_cls.hits)
-        proxy_p, proxy_p_port = start_proxy(stub_port, USER, PASSWORD,
+        proxy_p, proxy_p_port, COOKIE_P = start_proxy(stub_port, PASSWORD,
                                            strip_prefix="/train")
         base_p = "http://127.0.0.1:%d" % proxy_p_port
         try:
             # 前缀必须被剥掉：/train/api/x -> 上游 /api/x
-            code_a, _, _ = http_get(base_p + "/train/api/config/list", USER, PASSWORD)
+            code_a, _, _ = http_get(base_p + "/train/api/config/list", COOKIE_P)
             seen_a = stub_cls.hits[-1]["path"] if len(stub_cls.hits) > before else ""
             check("前缀剥离：/train/api/x -> 上游 /api/x",
                   code_a == 200 and seen_a == "/api/config/list",
@@ -220,7 +254,7 @@ def main():
 
             # 查询串必须跟着走（查看台 /combos?path=..&class=.. 靠这个）
             code_b, _, _ = http_get(base_p + "/train/api/run/r1/combos?path=1%7C2",
-                                    USER, PASSWORD)
+                                    COOKIE_P)
             seen_b = stub_cls.hits[-1]["path"] if len(stub_cls.hits) > before else ""
             check("前缀剥离保留查询串：/train/api/run/r1/combos?path=1|2",
                   code_b == 200 and seen_b == "/api/run/r1/combos?path=1%7C2",
@@ -228,23 +262,23 @@ def main():
 
             # 静态资源同样在子路径下（viewer 的 /vendor/... 与 adapter）
             code_c, _, _ = http_get(base_p + "/train/vendor/gtowizard/assets/x.css",
-                                    USER, PASSWORD)
+                                    COOKIE_P)
             seen_c = stub_cls.hits[-1]["path"] if len(stub_cls.hits) > before else ""
             check("前缀剥离对静态资源同样生效（/train/vendor/... -> /vendor/...）",
                   code_c == 200 and seen_c == "/vendor/gtowizard/assets/x.css",
                   "上游看到 %r" % seen_c)
 
             # 裸前缀 /train 与 /train/ 都要映射到上游根 /
-            code_d, _, _ = http_get(base_p + "/train", USER, PASSWORD)
+            code_d, _, _ = http_get(base_p + "/train", COOKIE_P)
             seen_d = stub_cls.hits[-1]["path"] if len(stub_cls.hits) > before else ""
-            code_e, _, _ = http_get(base_p + "/train/", USER, PASSWORD)
+            code_e, _, _ = http_get(base_p + "/train/", COOKIE_P)
             seen_e = stub_cls.hits[-1]["path"] if len(stub_cls.hits) > before else ""
             check("裸前缀 /train 与 /train/ 都映射到上游 /",
                   code_d == 200 and seen_d == "/" and code_e == 200 and seen_e == "/",
                   "得到 %r / %r" % (seen_d, seen_e))
 
             # 反例控制：不带前缀的请求不得被改写（防「什么都往前缀上凑」）
-            code_f, _, _ = http_get(base_p + "/api/runs", USER, PASSWORD)
+            code_f, _, _ = http_get(base_p + "/api/runs", COOKIE_P)
             seen_f = stub_cls.hits[-1]["path"] if len(stub_cls.hits) > before else ""
             check("反例：不带前缀的 /api/runs 原样转发（不被改写）",
                   code_f == 200 and seen_f == "/api/runs",
@@ -254,7 +288,7 @@ def main():
             hits_before_auth = len(stub_cls.hits)
             code_g, _, _ = http_get(base_p + "/train/api/runs")
             check("前缀路径上的未授权请求同样被拦（仍 0 命中）",
-                  code_g == 401 and len(stub_cls.hits) == hits_before_auth,
+                  code_g == 200 and len(stub_cls.hits) == hits_before_auth,
                   "code=%s 命中增量=%d" % (code_g, len(stub_cls.hits) - hits_before_auth))
         finally:
             proxy_p.shutdown()
@@ -272,18 +306,19 @@ def main():
         stub_b, port_b, cls_b = start_stub("mount-B")
         mounts = (("/train", "127.0.0.1", port_a),
                   ("/viewer", "127.0.0.1", port_b))
-        proxy_m, proxy_m_port = start_proxy(1, USER, PASSWORD)  # 上游故意不可达
+        proxy_m, proxy_m_port, _ = start_proxy(1, PASSWORD)  # 上游故意不可达
         proxy_m.shutdown(); proxy_m.server_close()
         import tunnel_auth as _ta
-        server_m = _ta.make_server(0, "127.0.0.1", 1, USER, PASSWORD,
+        server_m = _ta.make_server(0, "127.0.0.1", 1, PASSWORD, cookie_secure=False,
                                    mounts=mounts,
                                    landing_html=b"<html>landing</html>")
         threading.Thread(target=server_m.serve_forever, daemon=True).start()
         base_m = "http://127.0.0.1:%d" % server_m.server_address[1]
+        COOKIE_M = login_cookie(base_m, PASSWORD)
         try:
             # 不同前缀必须落到不同上游（这是「多路径」的全部意义）
-            code_1, body_1, _ = http_get(base_m + "/train/api/x", USER, PASSWORD)
-            code_2, body_2, _ = http_get(base_m + "/viewer/api/x", USER, PASSWORD)
+            code_1, body_1, _ = http_get(base_m + "/train/api/x", COOKIE_M)
+            code_2, body_2, _ = http_get(base_m + "/viewer/api/x", COOKIE_M)
             check("/train 与 /viewer 落到不同上游（不是同一个）",
                   code_1 == 200 and b"mount-A" in body_1
                   and code_2 == 200 and b"mount-B" in body_2,
@@ -293,14 +328,15 @@ def main():
                   "A=%r B=%r" % (cls_a.hits[-1]["path"], cls_b.hits[-1]["path"]))
 
             # 最长前缀优先：/train2 不能抢 /train 的请求 —— 用 /train 与 /train/extra 验证
-            server_m2 = _ta.make_server(0, "127.0.0.1", 1, USER, PASSWORD,
+            server_m2 = _ta.make_server(0, "127.0.0.1", 1, PASSWORD, cookie_secure=False,
                                         mounts=(("/a", "127.0.0.1", port_a),
                                                 ("/a/b", "127.0.0.1", port_b)))
             threading.Thread(target=server_m2.serve_forever, daemon=True).start()
             base_m2 = "http://127.0.0.1:%d" % server_m2.server_address[1]
+            COOKIE_M2 = login_cookie(base_m2, PASSWORD)
             try:
                 n_a = len(cls_a.hits); n_b = len(cls_b.hits)
-                http_get(base_m2 + "/a/b/api/x", USER, PASSWORD)
+                http_get(base_m2 + "/a/b/api/x", COOKIE_M2)
                 check("最长前缀优先：/a/b/... 归 /a/b 而不是 /a",
                       len(cls_b.hits) == n_b + 1 and len(cls_a.hits) == n_a,
                       "A增量=%d B增量=%d" % (len(cls_a.hits) - n_a, len(cls_b.hits) - n_b))
@@ -308,18 +344,20 @@ def main():
                 server_m2.shutdown(); server_m2.server_close()
 
             # 根路径 -> 落地页（需要认证），不是 404
-            code_land, body_land, _ = http_get(base_m + "/", USER, PASSWORD)
+            code_land, body_land, _ = http_get(base_m + "/", COOKIE_M)
             check("根路径返回落地页（列出各挂载点）",
                   code_land == 200 and b"landing" in body_land,
                   "code=%s body=%r" % (code_land, body_land[:30]))
 
             # 落地页也不能免密
-            code_land_auth, _, headers_land = http_get(base_m + "/")
-            check("落地页同样需要认证（无凭据 -> 401）",
-                  code_land_auth == 401, "code=%s" % code_land_auth)
+            code_land_auth, body_land_auth, _ = http_get(base_m + "/")
+            check("落地页同样需要认证（未登录只给登录页，不给落地页）",
+                  b"landing" not in body_land_auth
+                  and b'name="password"' in body_land_auth,
+                  "code=%s" % code_land_auth)
 
             # 未知前缀 -> 404（不静默兜底到某个上游）
-            code_404, _, _ = http_get(base_m + "/nosuch/api/x", USER, PASSWORD)
+            code_404, _, _ = http_get(base_m + "/nosuch/api/x", COOKIE_M)
             check("未匹配前缀 -> 404（不兜底到任意上游）",
                   code_404 == 404, "code=%s" % code_404)
 

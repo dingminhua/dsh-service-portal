@@ -238,13 +238,18 @@ def start_gui_if_needed(python_exe, script, port, name, cwd=None):
     return proc.pid, True
 
 
-def start_proxy(python_exe, upstream_port, proxy_port, user, password,
+def start_proxy(python_exe, upstream_port, proxy_port, password,
                 strip_prefix="", mounts=()):
-    """起认证代理；口令走环境变量，不进命令行。"""
+    """起认证代理；口令走环境变量，不进命令行。
+
+    认证形态：**只需口令**（自定义登录页 + 签名会话 cookie），没有账号。
+    本机调试走 http，故传 --insecure-cookie 让 cookie 不带 Secure —— 否则
+    浏览器在 http 下不会回传 cookie（外网经 cloudflared 恒为 https，无此问题）。
+    """
     argv = [python_exe, "-X", "utf8", os.path.join(HERE, "tunnel_auth.py"),
             "--listen", str(proxy_port),
             "--upstream", "127.0.0.1:%d" % upstream_port,
-            "--user", user]
+            "--insecure-cookie"]
     if strip_prefix:
         argv += ["--strip-prefix", strip_prefix]
     if mounts:
@@ -338,7 +343,6 @@ def print_status():
     if cred.get("mode") == "single-domain":
         print("模式    ：单域名 + 路径")
         print("入口    ：%s/" % (cred.get("base_url") or "").rstrip("/"))
-    print("用户名  ：%s" % cred.get("username"))
     print("口令    ：%s" % cred.get("password"))
     for key, info in (cred.get("endpoints") or {}).items():
         alive = port_listening(info.get("proxy_port", 0))
@@ -355,8 +359,17 @@ def main(argv=None):
                     help="cloudflared.exe 路径（默认复用 dsh-pocket 自带的那份）")
     ap.add_argument("--python", default=DEFAULT_PYTHON,
                     help="拉起 GUI 用的 python（默认 .venv313）")
-    ap.add_argument("--user", default="poker", help="Basic Auth 用户名")
-    ap.add_argument("--password", default="", help="指定口令（默认随机生成）")
+    ap.add_argument("--no-user", action="store_true",
+                    help=argparse.SUPPRESS)  # 兼容旧调用：账号已取消，静默忽略
+    ap.add_argument("--password", default="",
+                    help="固定口令；不给则每次启动自动随机生成一个新口令")
+    ap.add_argument("--password-mode", default="random",
+                    choices=("random", "fixed"),
+                    help="口令形态：random=每次启动随机生成（默认）；"
+                         "fixed=用 --password/--password-file 指定的固定口令")
+    ap.add_argument("--password-file", default=None,
+                    help="从文件读固定口令（推荐：口令不进命令行）；"
+                         "给了它等同于 --password-mode fixed")
     ap.add_argument("--only", default=None,
                     help="只公开某个服务（用清单里的 key，默认全部）")
     ap.add_argument("--services", default=None,
@@ -393,7 +406,31 @@ def main(argv=None):
         print("检测到上一次的公开入口，先停掉：")
         stop_all(quiet=True)
 
-    password = args.password.strip() or gen_password(12)
+    # 口令两形态：
+    #   random —— 每次启动都生成新口令（默认；域名与口令都换，泄漏窗口最小）
+    #   fixed  —— 用用户设定的固定口令（方便；但口令在多次开启间不变，
+    #             一旦泄漏就是长期有效，故启动时明确提示）
+    fixed_password = ""
+    if args.password_file:
+        try:
+            with open(args.password_file, "r", encoding="utf-8") as handle:
+                fixed_password = handle.read().strip()
+        except OSError as exc:
+            print("读不到 --password-file：%s" % exc, file=sys.stderr)
+            return 2
+    elif args.password.strip():
+        fixed_password = args.password.strip()
+
+    if args.password_mode == "fixed" or fixed_password:
+        if not fixed_password:
+            print("拒绝启动：--password-mode fixed 必须同时给出 --password "
+                  "或 --password-file", file=sys.stderr)
+            return 2
+        password = fixed_password
+        password_mode = "fixed"
+    else:
+        password = gen_password(12)
+        password_mode = "random"
     try:
         validate_password(password)
     except ValueError as exc:
@@ -443,7 +480,7 @@ def main(argv=None):
             return 1
 
         proxy = start_proxy(python_exe, args.single_port, args.single_port,
-                            args.user.strip(), password, mounts=mounts)
+                            password, mounts=mounts)
         if proxy is None:
             return 1
         processes.append({"role": "proxy_single", "pid": proxy.pid})
@@ -464,8 +501,8 @@ def main(argv=None):
         credentials = {
             "warning": "本文件含明文口令，属机密文件；不要提交、不要外发。",
             "started_at": started_at,
-            "username": args.user.strip(),
             "password": password,
+            "password_mode": password_mode,
             "auth": "HTTP Basic Auth",
             "mode": "single-domain",
             "base_url": url,
@@ -484,8 +521,8 @@ def main(argv=None):
         print("  %s/" % url.rstrip("/"))
         for key, info in endpoints.items():
             print("    /%s" % info["path"].strip("/") + "  →  " + info["name"])
-        print("\n账号：%s" % args.user.strip())
-        print("口令：%s" % password)
+        print("\n口令：%s   （%s）"
+              % (password, "固定口令" if password_mode == "fixed" else "本次随机生成"))
         print("\n凭据文件：%s（含明文口令，勿外发）" % CRED_FILE)
         print("停止：python -X utf8 tools/start_public_gui.py --stop")
         print("状态：python -X utf8 tools/start_public_gui.py --status")
@@ -513,7 +550,7 @@ def main(argv=None):
                   % (proxy_port, name), file=sys.stderr)
             continue
 
-        proxy = start_proxy(python_exe, gui_port, proxy_port, args.user.strip(), password)
+        proxy = start_proxy(python_exe, gui_port, proxy_port, password)
         if proxy is None:
             continue
         processes.append({"role": "proxy_%s" % key, "pid": proxy.pid})
@@ -538,8 +575,8 @@ def main(argv=None):
     credentials = {
         "warning": "本文件含明文口令，属机密文件；不要提交、不要外发。",
         "started_at": started_at,
-        "username": args.user.strip(),
         "password": password,
+        "password_mode": password_mode,
         "auth": "HTTP Basic Auth",
         "endpoints": endpoints,
     }
@@ -554,8 +591,8 @@ def main(argv=None):
     print("=" * 72)
     for key, info in endpoints.items():
         print("  %s：%s" % (info["name"], info["url"]))
-    print("\n账号：%s" % args.user.strip())
-    print("口令：%s" % password)
+    print("\n口令：%s   （%s）"
+          % (password, "固定口令" if password_mode == "fixed" else "本次随机生成"))
     print("\n凭据文件：%s（含明文口令，勿外发）" % CRED_FILE)
     print("停止：python -X utf8 tools/start_public_gui.py --stop")
     print("状态：python -X utf8 tools/start_public_gui.py --status")

@@ -15,14 +15,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 
 import { _internals, Config, name, apply } from "../lib/index.js";
 
-const { configOf, pythonFor, readStatus, portListening } = _internals;
+const { configOf, pythonFor, readStatus, portListening, passwordArgs } = _internals;
 
 /** 造一个假的**基础设施**仓库骨架（含 tools/start_public_gui.py 与 runs/）。 */
 function fakeRepo({ withScript = true, cred = null, state = null } = {}) {
@@ -153,6 +153,7 @@ test("readStatus：无凭据文件 → 未启动过，running:false，不报 pro
     assert.equal(s.ok, true);
     assert.equal(s.running, false);
     assert.equal(s.password, null);
+    assert.equal(s.passwordMode, null);
     assert.equal(s.problem, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -162,7 +163,7 @@ test("readStatus：无凭据文件 → 未启动过，running:false，不报 pro
 test("readStatus：凭据文件在但端口没监听 → running:false 且报告 problem", async () => {
   const root = fakeRepo({
     cred: {
-      username: "user", password: "secret",
+      password: "secret",
       mode: "separate-domains",
       endpoints: { train: { name: "训练", url: "https://a.trycloudflare.com", proxy_port: 48901 } },
     },
@@ -180,7 +181,7 @@ test("readStatus：凭据文件在且代理端口在听 → running:true", async
   const { server, port } = await listenOnFreePort();
   const root = fakeRepo({
     cred: {
-      username: "user", password: "secret",
+      password: "secret",
       mode: "separate-domains",
       endpoints: { train: { name: "训练", url: "https://a.trycloudflare.com", proxy_port: port } },
     },
@@ -189,8 +190,8 @@ test("readStatus：凭据文件在且代理端口在听 → running:true", async
     const s = await readStatus(repoOf(root));
     assert.equal(s.ok, true);
     assert.equal(s.running, true);
-    assert.equal(s.username, "user");
     assert.equal(s.password, "secret");
+    assert.equal(s.passwordMode, "random");
     assert.equal(s.endpoints.length, 1);
   } finally {
     server.close();
@@ -202,7 +203,7 @@ test("readStatus：single-domain 模式透传 baseUrl 与 path", async () => {
   const { server, port } = await listenOnFreePort();
   const root = fakeRepo({
     cred: {
-      username: "u", password: "p", mode: "single-domain",
+      password: "p", mode: "single-domain",
       base_url: "https://x.trycloudflare.com",
       endpoints: { train: { name: "训练", url: "https://x.trycloudflare.com/train/", path: "/train/", proxy_port: port } },
     },
@@ -217,6 +218,80 @@ test("readStatus：single-domain 模式透传 baseUrl 与 path", async () => {
     server.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// 口令形态（本次新增的核心需求）：每次随机 / 固定口令。
+//
+// 拦的是这类 bug：
+//   · 配了 fixed 但口令为空 -> 启动时才炸（应当**保存时就拒绝**）；
+//   · 口令短于门槛也照存 -> 启动器 validate_password 才退出码 2；
+//   · 未知/拼错的模式值被当成 fixed -> 安全侧应当回落 random；
+//   · 固定口令进命令行 -> 本机任意进程都能从 Win32_Process 读到。
+// ---------------------------------------------------------------------------
+
+test("configOf：默认口令形态是 random（安全侧默认）", () => {
+  const cfg = configOf({});
+  assert.equal(cfg.passwordMode, "random");
+  assert.equal(cfg.fixedPassword, "");
+});
+
+test("configOf：只有显式 fixed 才算固定口令", () => {
+  const fixed = configOf({ passwordMode: { get: () => "fixed" },
+    fixedPassword: { get: () => "abcdefghijkl" } });
+  assert.equal(fixed.passwordMode, "fixed");
+  assert.equal(fixed.fixedPassword, "abcdefghijkl");
+  // 拼错/未知值必须落回 random —— 绝不能因为字符串不匹配就放宽
+  for (const bogus of ["FIXED", "fixd", "", "random", "true", null]) {
+    const cfg = configOf({ passwordMode: { get: () => bogus } });
+    assert.equal(cfg.passwordMode, "random", `passwordMode=${bogus} 必须回落 random`);
+  }
+});
+
+test("configOf：固定口令两端空白被裁掉", () => {
+  const cfg = configOf({
+    passwordMode: { get: () => "fixed" },
+    fixedPassword: { get: () => "  abcdefghijkl  " },
+  });
+  assert.equal(cfg.fixedPassword, "abcdefghijkl");
+});
+
+test("passwordArgs：random 模式不传任何口令参数", () => {
+  const r = passwordArgs({ infraPath: tmpdir(), passwordMode: "random",
+    fixedPassword: "whatever" });
+  assert.deepEqual(r.argv, []);
+  assert.equal(r.tempFile, null);
+});
+
+test("passwordArgs：fixed 模式走临时文件，口令不进命令行", () => {
+  const root = mkdtempSync(join(tmpdir(), "sp-pw-"));
+  try {
+    const r = passwordArgs({ infraPath: root, passwordMode: "fixed",
+      fixedPassword: "abcdefghijkl" });
+    assert.equal(r.tempFile !== null, true);
+    assert.deepEqual(r.argv.slice(0, 2), ["--password-mode", "fixed"]);
+    assert.equal(r.argv[2], "--password-file");
+    assert.equal(r.argv[3], r.tempFile);
+    // 关键：命令行里绝不能出现口令本身
+    assert.equal(r.argv.some((a) => a.includes("abcdefghijkl")), false,
+      "固定口令泄漏进命令行（本机任意进程可读）");
+    // 临时文件内容就是口令
+    assert.equal(readFileSync(r.tempFile, "utf8").trim(), "abcdefghijkl");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("passwordArgs：fixed 但口令为空/过短 -> 明确报错（不等到启动才炸）", () => {
+  const empty = passwordArgs({ infraPath: tmpdir(), passwordMode: "fixed",
+    fixedPassword: "" });
+  assert.match(empty.error, /固定口令是空的/);
+  assert.deepEqual(empty.argv, []);
+  const short = passwordArgs({ infraPath: tmpdir(), passwordMode: "fixed",
+    fixedPassword: "short" });
+  assert.match(short.error, /至少 12 个字符/);
+  assert.deepEqual(short.argv, []);
+  assert.equal(short.tempFile, null);
 });
 
 test("portListening：真实监听端口返回 true", async () => {

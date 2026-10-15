@@ -22,8 +22,8 @@
 
 **dsh-service-portal (Service Portal)** is a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin.
 It exposes **any local service** to the public internet on demand: `cloudflared` creates a **random domain**,
-an **Basic Auth** proxy guards it with a **random password**, and a settings-page toggle shows the URL
-and credentials.
+a **password login** (password only, no username) guards the entrance, and a settings-page toggle
+shows the URL and the password.
 
 It originally lived inside `ld-rl-poker` (to put its training dashboard / model viewer online), but the
 portal itself has nothing to do with poker — **any local service** can use the same
@@ -32,8 +32,11 @@ portal itself has nothing to do with poker — **any local service** can use the
 ## Features
 
 - **One-click exposure** — the settings page starts the service → auth proxy → tunnel, no manual steps.
-- **Random domain + random password** — both change on every start; the password is written to a local
-  credentials file only (plain text, gitignored, never share it).
+- **Password only, no username** — visitors get a custom login page with a single password field;
+  the browser's native username+password dialog is never triggered.
+- **Two password shapes** — (1) **random per start** (default: smallest leak window);
+  (2) a **fixed password you set** (convenient, but once leaked it stays valid — the settings page says so).
+- **Random domain** — changes on every start, so the entrance itself is short-lived.
 - **Two shapes** — one random domain per service, or **one domain + path prefix**
   (`https://<random>/train/`).
 - **Manifest-driven** — write `services.json` to expose any service without touching code; an empty
@@ -48,7 +51,7 @@ portal itself has nothing to do with poker — **any local service** can use the
 https://<random>.trycloudflare.com   (cloudflared quick tunnel, new domain every start)
               |
               v
-127.0.0.1:<proxyPort>  tools/tunnel_auth.py (Basic Auth, new password every start)
+127.0.0.1:<proxyPort>  tools/tunnel_auth.py (password login + session cookie, auth before forwarding)
               |
               v
 127.0.0.1:<guiPort>    your local service (GUI / Ollama / any HTTP service)
@@ -79,6 +82,8 @@ Restart DSH after installing (the bundle loads in the host process).
 | `infraPath` | this repo root | Infrastructure repo: contains `tools/` and `runs/` (tunnel/proxy/credentials) |
 | `repoPath` | `D:\DshProject\ld-rl-poker` | Host repo root: where the exposed services live |
 | `pythonPath` | empty | Interpreter for services; auto-selects `.venv313` → `.runtime` → PATH |
+| `passwordMode` | `random` | Password shape: `random` = new password each start / `fixed` = your fixed password |
+| `fixedPassword` | empty | Used when `passwordMode = fixed`, at least 12 chars (validated on save) |
 | `webEnabled` | `true` | Mount the `/service-portal/api` routes |
 
 All four are `.volatile()`: changes apply immediately without remounting the plugin.
@@ -89,7 +94,9 @@ Mounted on the host webServer (`prefix` routes under `/service-portal/api`):
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
-| GET | `/service-portal/api/status` | Current state: running, mode, URL, password, endpoints |
+| GET | `/service-portal/api/status` | Current state: running, mode, URL, password, password mode, endpoints |
+| GET | `/service-portal/api/settings` | Password-shape settings (mode + fixed password + min length) |
+| POST | `/service-portal/api/settings` | Save password shape (`{"passwordMode":"fixed","fixedPassword":"..."}`) |
 | GET | `/service-portal/api` | Same as `/status` |
 | POST | `/service-portal/api/start` | Start (body optional `{"singleDomain": true}`, default single-domain+paths) |
 | POST | `/service-portal/api/stop` | Stop |
@@ -125,7 +132,7 @@ Priority: `--services <json>` > `$SERVICE_PORTAL_SERVICES` > `./services.json` >
 | File | Purpose |
 | :--- | :--- |
 | `tools/start_public_gui.py` | One-click launcher: read manifest → start services → proxy → cloudflared tunnel |
-| `tools/tunnel_auth.py` | Basic Auth reverse proxy with multi-mount path routing (auth before forwarding) |
+| `tools/tunnel_auth.py` | Password-login reverse proxy with multi-mount path routing (auth before forwarding) |
 | `tools/host_metrics.py` | Host metrics collection (CPU / memory / VRAM / GPU) |
 
 ```powershell
@@ -138,6 +145,7 @@ python -X utf8 tools/start_public_gui.py --status / --stop
 
 | Check | Count | Bug it catches |
 | :--- | ---: | :--- |
+| `tools/check_portal_auth.py` | 35 | Unauthenticated access allowed, forged/tampered/expired sessions, password stored in cookie, Basic Auth dialog |
 | `tools/check_tunnel_auth.py` | 35 | Auth bypass, prefix not stripped, wrong upstream, unknown prefix 200-fallback |
 | `tools/check_tunnel_domain.py` | 10 | Reusing the **previous** domain from append-only logs (530 publicly, fine locally) |
 | `tools/check_host_metrics.py` | 23 | Missing readings rendered as 0 (remote thinks the machine is idle) |
@@ -150,6 +158,13 @@ python -X utf8 tools/start_public_gui.py --status / --stop
 
 - The password is stored **plain text** in `runs/public_gui_credentials.json` and shown plain text
   on the settings page.
+- **Sessions are signed cookies** (HttpOnly, 12h by default): that browser stays authorised for
+  the window without re-entering the password. The signing key is per-process, so stopping the
+  portal logs everyone out.
+- **A fixed password keeps working across restarts** — one leak stays valid until you change it.
+  Keep the default `random` for temporary sharing.
+- Do not expose the portal's own `127.0.0.1` port to the internet: the cloudflared tunnel is the
+  only intended way in, and bypassing it bypasses the auth layer entirely.
 - **Whoever has the password can start/stop the exposed service from the internet.**
 - Some local services have **no auth of their own** (the two GUIs, Ollama, …); exposing them makes
   them public — the portal password is their only gate.
@@ -160,8 +175,8 @@ python -X utf8 tools/start_public_gui.py --status / --stop
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 18 host-side control checks
-& $node --test test/client.test.mjs    # 14 client distribution contract checks
+& $node --test test/host.test.mjs      # 24 host-side control checks
+& $node --test test/client.test.mjs    # 17 client distribution contract checks
 ```
 
 ## Relationship with sibling plugins

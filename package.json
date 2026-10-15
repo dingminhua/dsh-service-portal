@@ -1,8 +1,8 @@
 {
   "name": "dsh-service-portal",
   "displayName": "DSH Service Portal",
-  "description": "对外服务门户：一个随机域名 + 一个随机口令，把本机的服务按需对外开放（cloudflared 隧道 + Basic Auth 认证代理）。",
-  "version": "0.2.0",
+  "description": "对外服务门户：一个随机域名 + 一个口令，把本机的服务按需对外开放（cloudflared 隧道 + 口令登录代理，口令可随机或固定）。",
+  "version": "0.3.0",
   "author": "dingminhua",
   "copyright": "Copyright (c) 2026 LaoDing",
   "license": "MIT",
