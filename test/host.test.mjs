@@ -485,10 +485,21 @@ test("save_state：临时文件名唯一（并发启动不再 PermissionError）
 
 test("write_password：写失败不阻断启动（它只是给人看的副本）", () => {
   const src = readFileSync(join(ROOT, "tools", "portal_run.py"), "utf8");
-  const start = src.indexOf("def write_password");
-  const body = src.slice(start, src.indexOf("\ndef ", start + 10));
-  assert.ok(body.includes("return True"),
-    "写不进去也要 return True —— 真凭据在 portal_state.json，不该因此起不来");
-  assert.ok(body.includes("for attempt in range"),
+  // 公网口令与局域网口令共用 _write_secret_file
+  const start = src.indexOf("def _write_secret_file");
+  assert.ok(start > 0, "找不到 _write_secret_file");
+  const body = src.slice(start, src.indexOf("\ndef write_password", start));
+  assert.ok(body.includes("for _attempt in range"),
     "瞬时占用（杀毒扫描）要靠重试穿过");
+  assert.ok(body.includes("os.replace"),
+    "必须原子替换（避免写一半留下坏文件）");
+  assert.ok(body.includes("return False"),
+    "写不进去要 return False 而不是抛异常 —— 真凭据在 state 里，不该因此起不来");
+  // 两个入口都要在：公网口令 / 局域网口令（两套凭据分开）
+  assert.ok(src.includes("def write_password") && src.includes("def write_lan_password"),
+    "公网口令与局域网口令各有各的副本写入函数");
+  const lan = src.slice(src.indexOf("def write_lan_password"),
+    src.indexOf("def write_lan_password") + 200);
+  assert.ok(lan.includes("LAN_PASSWORD_FILE"),
+    "write_lan_password 写 LAN_PASSWORD_FILE（不能和公网写同一个文件）");
 });

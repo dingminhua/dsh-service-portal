@@ -48,6 +48,8 @@ LOG_DIR = os.path.join(RUNS_DIR, "portal_logs")
 STATE_FILE = os.path.join(RUNS_DIR, "portal_state.json")
 REGISTRY_FILE = os.path.join(RUNS_DIR, "portal_registry.json")
 PASSWORD_FILE = os.path.join(RUNS_DIR, "portal_password.txt")
+# 局域网口令的副本（与公网口令分开；内网短口令好输，公网长口令抗爆破）
+LAN_PASSWORD_FILE = os.path.join(RUNS_DIR, "portal_lan_password.txt")
 HEALTH_PATH = "/_auth/health"
 
 DEFAULT_PORTAL_PORT = 8899
@@ -207,8 +209,8 @@ def read_password():
         return ""
 
 
-def write_password(password):
-    """把口令写到 runs/portal_password.txt（方便用户/脚本查看，**不是**唯一凭据）。
+def _write_secret_file(path, value):
+    """把一段凭据原子写进文件，带重试；失败不阻断（返回 True/False）。
 
     这个文件只是「给人看的副本」——真正的凭据在 runs/portal_state.json 里。
     所以它写失败**不该让门户起不来**（早期版本直接抛 traceback 或退出码 4，
@@ -221,33 +223,37 @@ def write_password(password):
     因此这里用**原子写**（先写临时文件再替换）+ 重试，把这类瞬时冲突挡掉。
     """
     os.makedirs(RUNS_DIR, exist_ok=True)
-    temp_path = PASSWORD_FILE + ".tmp"
+    temp_path = "%s.%d.tmp" % (path, os.getpid())
     last_error = None
-    for attempt in range(5):
+    for _attempt in range(5):
         try:
-            # 原子写：临时文件 + os.replace。避免「创建后被别的进程抓住」的窗口，
-            # 也避免写一半留下半个文件。
             with open(temp_path, "w", encoding="utf-8") as handle:
-                handle.write(password + "\n")
-            os.replace(temp_path, PASSWORD_FILE)
+                handle.write(value + "\n")
+            os.replace(temp_path, path)
             try:
-                os.chmod(PASSWORD_FILE, 0o600)
+                os.chmod(path, 0o600)
             except OSError:
                 pass
             return True
         except OSError as exc:
             last_error = exc
+            time.sleep(0.15)
             try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+                os.remove(temp_path)
             except OSError:
                 pass
-            time.sleep(0.15 * (attempt + 1))
-    print("提示：口令副本文件写不进去（%s）：%s" % (PASSWORD_FILE, last_error),
-          file=sys.stderr)
-    print("不影响使用：口令已存在 runs/portal_state.json，门户会正常启动。",
-          file=sys.stderr)
-    return True
+    print("提示：凭据副本写不进去（%s）：%s —— 门户照常运行，"
+          "真凭据在 %s" % (os.path.basename(path), last_error,
+                           os.path.basename(STATE_FILE)), file=sys.stderr)
+    return False
+
+
+def write_password(password):
+    return _write_secret_file(PASSWORD_FILE, password)
+
+
+def write_lan_password(pin):
+    return _write_secret_file(LAN_PASSWORD_FILE, pin)
 
 
 # --------------------------------------------------------------- 服务进程管理
@@ -354,6 +360,15 @@ def run_portal(args):
         return 2
     write_password(password)
 
+    # ---- 局域网口令（与公网口令分开）----
+    # 对齐 dsh-pocket：公网 16 字符随机串抗爆破；局域网用 8 位数字，手机好输。
+    # 从上次状态文件恢复（用户自定义过 / 刷新过的值要延续），没有就新生成一个。
+    _saved_pw = (load_state() or {})
+    lan_password = str(_saved_pw.get("lan_password") or "").strip()
+    if not lan_password or not lan_password.isdigit():
+        lan_password = portal_login.gen_lan_password(8)
+    write_lan_password(lan_password)
+
     registry = portal_registry.Registry(REGISTRY_FILE)
     registry.load()
     if registry.load_error:
@@ -379,6 +394,9 @@ def run_portal(args):
         "lan_auth": bool(args.lan_auth) or bool(saved.get("lan_auth_enabled")),
         "lan_enabled": saved.get("lan_enabled") is not False,
         "lan_ip_override": (args.lan_ip or "").strip() or saved_override,
+        # 局域网口令：上面已经算好（沿用上次自定义/刷新的值，没有就新生成）
+        "lan_password": lan_password,
+        "lan_pin_custom": bool(saved.get("lan_pin_custom")),
     }
 
     # ---- 门户回调 ----
@@ -414,6 +432,10 @@ def run_portal(args):
             "lan_auth_enabled": bool(runtime["lan_auth"]),
             "lan_enabled": bool(runtime["lan_enabled"]),
             "password": password,
+            # 局域网口令与「是否自定义」：控制台与设置页都要能显示/刷新它。
+            # 内网免密时不返回它（那时它为空，显示出来反而误导用户以为要输）。
+            "lan_password": runtime["lan_password"] if runtime["lan_auth"] else "",
+            "lan_pin_custom": bool(runtime["lan_pin_custom"]),
         }
 
     def console_state():
@@ -587,6 +609,47 @@ def run_portal(args):
                 "lan_ip_override": runtime["lan_ip_override"],
             })
             return True
+        # ---- 局域网口令：刷新（随机）/ 自定义 ----
+        # 对齐 dsh-pocket 的 lanTokenRefresh 与 pinSetCustom（issue #33）：
+        # 局域网口令可以「刷新」成一个新的随机值，也可以「自定义」成用户记得住的；
+        # 自定义后**不再自动轮换**（用户选了自己要的，就别给他换掉）。
+        if method == "POST" and route == "/lan-pin/refresh":
+            runtime["lan_password"] = portal_login.gen_lan_password(8)
+            runtime["lan_pin_custom"] = False
+            write_lan_password(runtime["lan_password"])
+            try:
+                st = load_state() or {}
+                st["lan_password"] = runtime["lan_password"]
+                st["lan_pin_custom"] = False
+                save_state(st)
+            except OSError as exc:
+                handler._send_json(500, {"ok": False, "error": "写状态失败：%r" % exc})
+                return True
+            handler._send_json(200, {"ok": True,
+                                     "lan_password": runtime["lan_password"],
+                                     "lan_pin_custom": False})
+            return True
+        if method == "POST" and route == "/lan-pin/custom":
+            data = parse_body(handler, body)
+            try:
+                value = portal_login.validate_lan_pin(data.get("value"))
+            except ValueError as exc:
+                handler._send_json(400, {"ok": False, "error": str(exc)})
+                return True
+            runtime["lan_password"] = value
+            runtime["lan_pin_custom"] = True
+            write_lan_password(value)
+            try:
+                st = load_state() or {}
+                st["lan_password"] = value
+                st["lan_pin_custom"] = True
+                save_state(st)
+            except OSError as exc:
+                handler._send_json(500, {"ok": False, "error": "写状态失败：%r" % exc})
+                return True
+            handler._send_json(200, {"ok": True, "lan_password": value,
+                                     "lan_pin_custom": True})
+            return True
         if method == "POST" and route == "/tunnel/start":
             if public_url_holder["url"]:
                 handler._send_json(200, {"ok": True,
@@ -688,6 +751,8 @@ def run_portal(args):
         try:
             server = portal_proxy.make_portal_server(attempt_port, {
                 "password": password,
+                # 内网口令**动态可改**：设置页刷新/自定义后立即生效，不用重启门户。
+                "lan_password_provider": lambda: runtime["lan_password"],
                 "cookie_secure": False,  # 内网是 http；公网经隧道是 https 也能用
                 # 内网免密开关**动态可改**：设置页切「局域网访问密码」时立即生效，
                 # 不重启门户（重启会换掉隧道域名，代价太大）。
@@ -695,6 +760,7 @@ def run_portal(args):
                 "open_classes_provider": lambda: (
                     ("loopback",) if runtime["lan_auth"] else ("loopback", "lan")),
                 "lan_enabled_provider": lambda: runtime["lan_enabled"],
+        "lan_ip_override_provider": lambda: runtime["lan_ip_override"],
                 "console_state": console_state,
                 "console_page": lambda state, is_public: portal_console.console_html(
                     state, is_public=is_public),
@@ -761,8 +827,16 @@ def run_portal(args):
         "password": password,
         "public_url": public_url_holder["url"],
         "lan_urls": state_snapshot()["lan_urls"],
-        "lan_auth_enabled": bool(args.lan_auth),
+        # 候选列表也要落盘：设置页「高级·手动选地址」的下拉框靠它列出可选项。
+        # 早先**没写这个字段**，宿主读回来永远是空数组 —— 下拉框里只有
+        # 「自动（推荐）」一项，用户看不到也选不到别的地址，
+        # 表现出来就是「自动选地址没有效果」。
+        "lan_candidates": state_snapshot()["lan_candidates"],
+        "lan_candidate_detail": state_snapshot()["lan_candidate_detail"],
+        "lan_auth_enabled": bool(runtime["lan_auth"]),
         "lan_enabled": bool(runtime["lan_enabled"]),
+        "lan_password": runtime["lan_password"],
+        "lan_pin_custom": bool(runtime["lan_pin_custom"]),
         "lan_ip_override": runtime["lan_ip_override"],
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     })

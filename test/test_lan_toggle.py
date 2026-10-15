@@ -96,10 +96,29 @@ def main():
               b'name="password"' in body, "code=%s" % status)
 
         # 内网即使有口令，登录后也能进（证明不是把内网锁死）
+        #
+        # 注意用**局域网口令**，不是公网 PASSWORD —— 两套凭据是分开的：
+        # 内网短数字好输、公网长随机串抗爆破；公网口令在内网**不该**被接受。
+        # 这里读的是门户刚生成/保存的那个局域网口令。
+        status, body = call("/_api/state", host="127.0.0.1:%d" % PORT)
+        lan_pin = ""
+        try:
+            lan_pin = json.loads(body).get("lan_password") or ""
+        except ValueError:
+            pass
+        check("门户给出了局域网口令（数字，手机好输）",
+              bool(lan_pin) and lan_pin.isdigit(), "lan_pin=%r" % lan_pin)
+        status, _ = call("/_auth/login", method="POST",
+                         data=urllib.parse.urlencode({"password": lan_pin}).encode(),
+                         ctype="application/x-www-form-urlencoded")
+        check("内网用局域网口令能登录", status == 303, "code=%s" % status)
+
+        # 反例：公网口令在内网**不能**用（两套凭据真的分开了）
         status, _ = call("/_auth/login", method="POST",
                          data=urllib.parse.urlencode({"password": PASSWORD}).encode(),
                          ctype="application/x-www-form-urlencoded")
-        check("内网用正确口令能登录", status == 303, "code=%s" % status)
+        check("内网不接受公网口令（凭据确实分开）", status == 401,
+              "code=%s" % status)
 
         # 关掉 -> 立即恢复免密
         #
@@ -124,9 +143,9 @@ def main():
         check("开了口令后无会话的内网请求会被拦（不是恒放行）",
               b'name="password"' in body, "code=%s" % status)
 
-        # 内网登录后就能调了（有会话）
+        # 内网登录后就能调了（有会话）—— 仍用局域网口令
         call("/_auth/login", method="POST",
-             data=urllib.parse.urlencode({"password": PASSWORD}).encode(),
+             data=urllib.parse.urlencode({"password": lan_pin}).encode(),
              ctype="application/x-www-form-urlencoded")
         status, body = call("/_api/settings", method="GET")
         check("内网登录后管理 API 可用",

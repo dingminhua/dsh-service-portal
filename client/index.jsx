@@ -31,6 +31,15 @@ const inject = ["slots", "connection"];
 
 const API = "/service-portal/api";
 
+// 项目信息（标题行右上角展示，对齐 dsh-pocket 的同款区块）
+const DEVELOPER = "丁敏华 (dingminhua)";
+const REPO_URL = "https://github.com/dingminhua/dsh-service-portal";
+
+// 局域网口令长度门槛 —— 与后端 portal_login.validate_lan_pin 一致。
+// 前端先挡一层省一次往返；后端仍有权威校验（不信任前端）。
+const LAN_PIN_MIN = 6;
+const LAN_PIN_MAX = 12;
+
 const styles = {
   card: {
     background: "var(--dsw-alias-bg-layer-1,#fff)",
@@ -100,6 +109,21 @@ const styles = {
   },
   errInline: {
     color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12,
+  },
+  // 「自定义后不再自动轮换」这类提示：要显眼但不能像报错
+  warnInline: {
+    color: "var(--dsw-alias-state-warning-primary,#d97706)", fontSize: 12,
+  },
+  // 右上角「开发者 / 求 Star」区块（对齐 dsh-pocket 排版）
+  credit: {
+    fontSize: 12, textAlign: "right", flexShrink: 0,
+    color: "var(--dsw-alias-label-tertiary,#8b93a1)", lineHeight: 1.5,
+    marginLeft: 12,
+  },
+  creditLine: { whiteSpace: "nowrap" },
+  creditLink: {
+    color: "var(--dsw-alias-brand-primary,#4f6ef7)", fontSize: 12,
+    lineHeight: 1.6, textDecoration: "underline", whiteSpace: "nowrap",
   },
   tag: {
     fontSize: 11, padding: "1px 7px", borderRadius: 999,
@@ -179,6 +203,11 @@ function ServicePortalSettingsTab() {
   const [lanAuth, setLanAuth] = React.useState(null);
   // 局域网访问总开关（默认开）
   const [lanEnabled, setLanEnabled] = React.useState(true);
+  // **局域网口令**（与公网口令分开）：内网短数字好输，公网长随机串抗爆破。
+  // 早先这里显示的是公网 password，于是手机在 WiFi 下要输 16 位随机串。
+  const [lanPassword, setLanPassword] = React.useState("");
+  // 是否已自定义（自定义后开启公网不再自动轮换，要告知用户）
+  const [lanPinCustom, setLanPinCustom] = React.useState(false);
   // 自定义局域网口令输入态
   const [customOpen, setCustomOpen] = React.useState(false);
   const [customValue, setCustomValue] = React.useState("");
@@ -223,6 +252,8 @@ function ServicePortalSettingsTab() {
       if (s && s.kind === "portal") {
         setLanAuth(Boolean(s.lanAuthEnabled));
         setLanEnabled(s.lanEnabled !== false);
+        setLanPassword(s.lanPassword || "");
+        setLanPinCustom(Boolean(s.lanPinCustom));
         setLanIp(s.lanIpOverride || "");
         setLanNote(s.lanNote || "");
       }
@@ -298,24 +329,35 @@ function ServicePortalSettingsTab() {
     }
   };
 
+  // 保存自定义**局域网**口令（6–12 位数字）。
+  // 与公网口令分开：早先这里设的是公网 fixedPassword，改的其实是公网口令 ——
+  // 用户在「局域网访问密码」区块里操作，改到的却是另一个东西。
   const saveCustomPin = async () => {
     setCustomErr("");
     const value = customValue.trim();
-    if (value.length < 12) {
-      setCustomErr("口令至少 12 个字符");
+    // 本地先挡一层，省一次往返；服务端仍有权威校验（不信任前端）
+    if (!/^\d+$/.test(value)) {
+      setCustomErr("只能是数字（手机上好输入）");
       return;
     }
+    if (value.length < LAN_PIN_MIN || value.length > LAN_PIN_MAX) {
+      setCustomErr("需要 " + LAN_PIN_MIN + "–" + LAN_PIN_MAX + " 位数字");
+      return;
+    }
+    setBusy("lan-custom");
     try {
-      const r = await request("/settings", "POST", {
-        passwordMode: "fixed", fixedPassword: value,
-      });
-      if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+      const r = await request("/lan-pin/custom", "POST", { value });
+      if (!r || r.ok !== true) throw new Error((r && r.error) || "保存失败");
+      setLanPassword(r.lan_password);
+      setLanPinCustom(true);
       setCustomOpen(false);
       setCustomValue("");
+      setShowPassword(true);
+      showToast("已设置自定义局域网口令");
       await load();
     } catch (e) {
       setCustomErr(String(e && e.message ? e.message : e));
-    }
+    } finally { setBusy(""); }
   };
 
   const doStart = async (lanOnly) => {
@@ -366,16 +408,26 @@ function ServicePortalSettingsTab() {
 
   const children = [];
 
-  // 标题行
+  // 标题行 + 右上角「开发者 / 求颗 Star」（对齐 dsh-pocket 的同款区块）。
+  // 为什么放这里：这是设置页唯一的「关于」区域，用户第一次打开就能看到作者与
+  // 项目地址；放在页面底部几乎没人会滚到。
   children.push(h("div", { key: "head", style: styles.head },
     h("img", {
       src: SERVICE_PORTAL_PLUGIN_ICON, alt: "", width: 32, height: 32,
       style: styles.icon,
     }),
-    h("div", null,
-      h("div", { style: styles.title }, "对外服务门户"),
+    h("div", { style: { flex: 1, minWidth: 0 } },
+      h("div", { style: styles.title }, "手机访问"),
       h("div", { style: styles.muted },
-        "手机扫码打开的就是门户控制台，在那里管理要开放的服务"),
+        "手机扫码打开的就是电脑上的这个界面，实时同步"),
+    ),
+    h("div", { style: styles.credit },
+      h("div", { style: styles.creditLine }, "开发者：" + DEVELOPER),
+      h("div", { style: styles.creditLine }, "⭐ 顺手留颗 Star，作者能高兴一整天"),
+      h("a", {
+        href: REPO_URL, target: "_blank", rel: "noreferrer",
+        style: styles.creditLink,
+      }, "行，给你一颗 Star"),
     ),
   ));
 
@@ -439,30 +491,39 @@ function ServicePortalSettingsTab() {
     if (lanAuth) {
       lanRows.push(h("div", { key: "lan-pin-value", style: styles.row },
         h("code", { style: styles.code },
-          showPassword ? (password || "(无)") : "•".repeat((password || "").length)),
+          showPassword ? (lanPassword || "(无)")
+            : "•".repeat((lanPassword || "").length)),
         h("button", {
           style: styles.btn, type: "button",
           onClick: () => setShowPassword(!showPassword),
         }, showPassword ? "隐藏" : "显示"),
+        // 刷新：换一个新的**随机数字**局域网口令（对齐 dsh-pocket 的 lanTokenRefresh）
         h("button", {
           style: styles.btn, type: "button",
           onClick: async () => {
-            // 刷新口令 = 立刻换一个新的（旧的立即作废）
+            setBusy("lan-pin");
             try {
-              const value = Math.random().toString(36).slice(2, 10)
-                + Math.random().toString(36).slice(2, 10);
-              const r = await request("/settings", "POST", {
-                passwordMode: "fixed", fixedPassword: value,
-              });
-              if (r && r.ok) await load();
-            } catch { /* 忽略 */ }
+              const r = await request("/lan-pin/refresh", "POST", {});
+              if (!r || r.ok !== true) throw new Error((r && r.error) || "刷新失败");
+              setLanPassword(r.lan_password);
+              setLanPinCustom(false);
+              setShowPassword(true);
+              showToast("已生成新的局域网口令");
+              await load();
+            } catch (e) {
+              setError(String(e && e.message ? e.message : e));
+            } finally { setBusy(""); }
           },
-        }, "刷新"),
+        }, busy === "lan-pin" ? "刷新中…" : "刷新"),
         !customOpen
           ? h("button", {
               style: styles.btn, type: "button",
               onClick: () => { setCustomOpen(true); setCustomErr(""); },
             }, "自定义")
+          : null,
+        // 自定义后不再自动轮换 —— 明确告知，否则用户会疑惑「为什么开启公网没换掉它」
+        lanPinCustom
+          ? h("span", { style: styles.warnInline }, "自定义后开启公网不再自动换")
           : null,
       ));
     }
@@ -471,11 +532,19 @@ function ServicePortalSettingsTab() {
       lanRows.push(h("div", { key: "lan-custom", style: styles.row },
         h("input", {
           type: "text", value: customValue, style: styles.input,
-          placeholder: "新口令（12–64 位）", autoComplete: "off",
-          onChange: (e) => setCustomValue(e.target.value),
+          placeholder: "局域网新口令（6–12 位数字）", autoComplete: "off",
+          inputMode: "numeric", maxLength: LAN_PIN_MAX, autoFocus: true,
+          // 只留数字：局域网口令是给手机手输的，允许字母/符号只会让人输错
+          onChange: (e) => setCustomValue(e.target.value.replace(/\D/g, "")),
+          onKeyDown: (e) => {
+            if (e.key === "Enter") saveCustomPin();
+            if (e.key === "Escape") { setCustomOpen(false); setCustomErr(""); }
+          },
         }),
         h("button", { style: styles.primary, type: "button",
-                      onClick: saveCustomPin }, "保存"),
+                      disabled: busy === "lan-custom",
+                      onClick: saveCustomPin },
+          busy === "lan-custom" ? "保存中…" : "保存"),
         h("button", { style: styles.btn, type: "button",
                       onClick: () => { setCustomOpen(false); setCustomErr(""); } },
           "取消"),

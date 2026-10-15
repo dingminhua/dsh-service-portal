@@ -177,6 +177,36 @@ def lan_access_enabled(provider):
     return True
 
 
+def is_lan_override_host(host_header, override):
+    """这个 Host 是不是用户**手动指定**的局域网地址？
+
+    为什么必须有这一条（dsh-pocket issue #79 的同一个坑）：
+    用户在「高级·手动选地址」里可以挑任意本机网卡地址，而有些 overlay 网段
+    （Radmin VPN 的 26.x、部分 Tailscale 段）**不在 RFC1918 里** ——
+    classify_host() 会把它们判成 `public`，于是：
+      · 用户从那个地址访问自己的门户，被要求输**公网**口令；
+      · 而他看到界面上写的是「局域网地址」，去输局域网口令 —— 永远「口令错误」。
+    所以：**只要 Host 等于用户手动选的地址，就按局域网裁决**（优先级高于
+    classify_host）。用户已经明确说了「这是我的局域网地址」，那就以他为准。
+
+    只比主机名（忽略端口）与大小写；override 为空表示自动，不做覆盖。
+    """
+    want = str(override or "").strip().lower()
+    if not want:
+        return False
+    host = str(host_header or "").strip().lower()
+    if not host:
+        return False
+    # 去掉端口（IPv6 的 [::1]:8899 也照顾到）
+    if host.startswith("["):
+        name = host[1:host.find("]")] if "]" in host else host
+    elif ":" in host:
+        name = host.rsplit(":", 1)[0]
+    else:
+        name = host
+    return name == want
+
+
 def needs_auth(kind, open_classes=("loopback", "lan"),
                open_classes_provider=None, lan_enabled_provider=None):
     """该来源是否需要口令（认证层的唯一判定入口，纯函数便于控制检验直接测）。
@@ -187,6 +217,17 @@ def needs_auth(kind, open_classes=("loopback", "lan"),
     if kind == "lan" and not lan_access_enabled(lan_enabled_provider):
         return True
     return kind not in resolve_open_classes(open_classes, open_classes_provider)
+
+
+def resolve_request_kind(host_header, lan_ip_override=None):
+    """请求的最终分类 —— 手动指定的局域网地址**优先**于按网段判定。
+
+    这是 classify_host() 外面的一层：用户手动选了地址，就按局域网处理
+    （见 is_lan_override_host 的说明）。没选就完全按 classify_host。
+    """
+    if is_lan_override_host(host_header, lan_ip_override):
+        return "lan"
+    return classify_host(host_header)
 
 
 def classify_source(addr):
@@ -300,6 +341,11 @@ class PortalHandler(BaseHTTPRequestHandler):
     sys_version = ""
 
     password = ""
+    # 局域网口令（内网访问用）。与公网 password 分开：内网口令短好输，
+    # 公网口令长抗爆破。为空表示内网免密（不需要口令）。
+    lan_password = ""
+    # 动态 provider（可选）：设置页刷新/自定义内网口令后要立即生效，不重启门户。
+    lan_password_provider = None
     secret = b""
     session_ttl = DEFAULT_SESSION_TTL
     cookie_secure = True
@@ -312,6 +358,9 @@ class PortalHandler(BaseHTTPRequestHandler):
     # 局域网访问总开关（可选 provider）：callable() -> bool。返回 False 时内网按
     # 公网对待（要口令），用于设置页的「局域网访问」总开关。
     lan_enabled_provider = None
+    # 用户手动选定的局域网地址（可选 provider）：命中这个 Host 就按局域网裁决，
+    # 不管它的网段是否落在 RFC1918 里（Radmin 26.x / Tailscale 等 overlay）。
+    lan_ip_override_provider = None
     upstream_timeout = 60.0
     # 回调：() -> dict(控制台 state)；以及 API 处理器
     console_state = None        # callable() -> dict
@@ -328,8 +377,27 @@ class PortalHandler(BaseHTTPRequestHandler):
         sys.stderr.flush()
 
     # ---- 工具 ----
+    def _lan_password(self):
+        """当前局域网口令（优先取动态 provider —— 设置页刷新/自定义后立即生效）。"""
+        provider = type(self).lan_password_provider
+        if callable(provider):
+            try:
+                return str(provider() or "")
+            except Exception:
+                return ""
+        return type(self).lan_password
+
     def _request_class(self):
-        return classify_host(self.headers.get("Host", ""))
+        # 用户手动指定的局域网地址优先（见 resolve_request_kind 的说明）：
+        # 他明确选了这个地址，就按局域网裁决，不看网段。
+        provider = type(self).lan_ip_override_provider
+        override = ""
+        if callable(provider):
+            try:
+                override = str(provider() or "")
+            except Exception:
+                override = ""
+        return resolve_request_kind(self.headers.get("Host", ""), override)
 
     def _needs_auth(self, kind):
         return needs_auth(
@@ -390,7 +458,16 @@ class PortalHandler(BaseHTTPRequestHandler):
         self._send(status, login_page_html(error=error))
 
     def _handle_login(self):
-        """POST 口令 -> 校验（带限速）-> 下发会话。"""
+        """POST 口令 -> 校验（带限速）-> 下发会话。
+
+        **两套口令分开校验**（对齐 dsh-pocket 的 lanToken / accessToken 分离）：
+          · 内网（loopback/lan）：用**局域网口令**；
+          · 公网（public）：用**公网口令**。
+        为什么不共用一个：公网口令是抗爆破用的 16 字符随机串，让手机在同一 WiFi
+        下每次手输那一长串没法用；而局域网口令短、好输，但绝不能拿去当公网凭据。
+        早先只有一个 self.password，内网与公网同口令 —— 既不好用（手机输长串），
+        也不该（局域网用户知道了等于知道公网口令）。
+        """
         ip = client_ip(self)
         limiter = type(self).rate_limiter
         if limiter is not None:
@@ -404,10 +481,24 @@ class PortalHandler(BaseHTTPRequestHandler):
                                self.headers.get("Content-Type", ""))
         if candidate is None:
             return self._login_page("提交格式不正确，请重新输入口令。", status=400)
-        if not password_matches(candidate, self.password):
+
+        # 按请求来源选该比对哪个口令。注意这里用的是**已解析出的分类**
+        # （含手动选地址的覆盖），与后面放行判定用的是同一套，不会出现
+        # 「放行看内网、验口令看公网」这种自相矛盾。
+        kind = self._request_class()
+        lan_pin = self._lan_password()
+        if kind in ("loopback", "lan") and lan_pin:
+            expected = lan_pin
+            expected_label = "局域网口令"
+        else:
+            expected = self.password
+            expected_label = "口令"
+
+        if not expected or not password_matches(candidate, expected):
             if limiter is not None:
                 limiter.record_failure(ip)
-            return self._login_page("口令错误，请重试。", status=401)
+            return self._login_page("口令错误，请重试（%s）。" % expected_label,
+                                    status=401)
         if limiter is not None:
             limiter.clear(ip)
         token = make_session(self.secret, self.session_ttl)
@@ -751,12 +842,15 @@ def make_portal_server(listen_port, config, listen_host="0.0.0.0"):
     """
     attrs = {
         "password": config.get("password", ""),
+        "lan_password": config.get("lan_password", ""),
+        "lan_password_provider": config.get("lan_password_provider"),
         "secret": config.get("secret") or portal_login.gen_secret(),
         "session_ttl": int(config.get("session_ttl", DEFAULT_SESSION_TTL)),
         "cookie_secure": bool(config.get("cookie_secure", True)),
         "open_classes": tuple(config.get("open_classes", ("loopback", "lan"))),
         "open_classes_provider": config.get("open_classes_provider"),
         "lan_enabled_provider": config.get("lan_enabled_provider"),
+        "lan_ip_override_provider": config.get("lan_ip_override_provider"),
         "console_state": config.get("console_state"),
         "console_page": config.get("console_page"),
         "api_handler": config.get("api_handler"),

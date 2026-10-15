@@ -46,8 +46,42 @@ MIN_PASSWORD_LEN = 12
 
 
 def gen_password(nbytes=12):
-    """生成随机口令（默认 16 字符 URL-safe）。"""
+    """生成随机口令（默认 16 字符 URL-safe）。**公网口令**用这个。"""
     return secrets.token_urlsafe(nbytes)
+
+
+def gen_lan_password(digits=8):
+    """生成随机**局域网口令**：纯数字，便于在手机上输入。
+
+    为什么局域网口令和公网口令用不同规格（对齐 dsh-pocket）：
+    · 公网口令要抗爆破，用 16 字符 URL-safe（大小写+数字+符号）；
+    · 局域网口令是「同一 WiFi 下手机手输」的场景 —— 手机上切大小写/找符号
+      很麻烦，所以用短数字串（默认 8 位）。风险边界不同：能连上你的 WiFi
+      本身就已经是一道门槛，且我们的认证层会按 Host 把公网请求与内网分开，
+      公网拿这个数字串是进不来的（公网要公网口令）。
+    """
+    return "".join(secrets.choice("0123456789") for _ in range(digits))
+
+
+LAN_PIN_MIN = 6
+LAN_PIN_MAX = 12
+
+
+def validate_lan_pin(pin):
+    """局域网自定义口令的门槛：6–12 位纯数字。
+
+    比公网宽松是有意的（局域网手输场景），但仍然拒绝空值和字母符号 ——
+    不允许把局域网口令设成「1」这种一眼可猜的值。
+    """
+    text = str(pin or "").strip()
+    if not text:
+        raise ValueError("局域网口令不能为空")
+    if not text.isdigit():
+        raise ValueError("局域网口令只能是数字（手机上好输入）")
+    if not (LAN_PIN_MIN <= len(text) <= LAN_PIN_MAX):
+        raise ValueError("局域网口令需要 %d–%d 位数字（当前 %d 位）"
+                         % (LAN_PIN_MIN, LAN_PIN_MAX, len(text)))
+    return text
 
 
 def gen_secret():

@@ -206,6 +206,8 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
+| `tools/check_portal_parity.py` | 41 | 设置页三处对标：缺右上角求 Star 区块、局域网口令与公网共用、**「自动选地址」只是显示不生效** |
+| `tools/check_portal_lan_pin.py` | 23 | 局域网口令刷新/自定义；**公网拿局域网口令能进来**（安全边界）、候选列表没落盘 |
 | `tools/check_portal_form.py` | 8 | **控制台表单提交被当成坏 JSON**（页面上点「添加服务」永远失败）、表单没有 key 字段导致必然失败 |
 | `tools/check_portal_tunnel.py` | 11 | **门户已在跑时「开启公网访问」什么都不做**（幂等检查把建隧道也跳过了）、「关闭公网」把整个门户停掉 |
 | `tools/check_portal_bind.py` | 7 | **只绑 127.0.0.1**（手机永远连不上）、Windows `SO_REUSEADDR` 重复绑定（流量随机分流）、端口被占不换端口 |
