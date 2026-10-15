@@ -18,7 +18,7 @@
 
 | 项目 | 仓库 | 参考内容 | 许可证 |
 | --- | --- | --- | --- |
-| `ld-rl-poker`（自研） | 本机 `D:\DshProject\ld-rl-poker` | 门户的三个 Python 工具（隧道启动器、认证代理、机器状态采集）最初实现于此，随迁移带入并继续演化 | **MIT**（Copyright (c) 2026 LaoDing） |
+| `ld-rl-poker`（自研） | 本机 `D:\DshProject\ld-rl-poker` | 门户的两个 Python 工具（隧道启动器、认证代理）最初实现于此，随迁移带入并继续演化 | **MIT**（Copyright (c) 2026 LaoDing） |
 | `dsh-connect-workbuddy` | <https://github.com/dingminhua/dsh-connect-workbuddy> | 插件家族品牌图标（`client/icon.ts` 内联的 64px data URI，逐字节相同）；设置卡片外观风格 | **MIT**（Copyright (c) 2026 LaoDing） |
 | `dsh-connect-trae` | <https://github.com/dingminhua/dsh-connect-trae> | `dsm-*` 卡片样式与 `row.*` 文案键约定（经 `dsh-subagent-default-model` 承继） | **MIT**（Copyright (c) 2026 LaoDing） |
 | `dsh-subagent-default-model` | <https://github.com/dingminhua/dsh-subagent-default-model> | 插件家族的卡片 CSS 与品牌图标基准 | **MIT**（Copyright (c) 2026 LaoDing） |

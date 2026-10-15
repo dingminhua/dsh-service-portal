@@ -133,7 +133,6 @@ Priority: `--services <json>` > `$SERVICE_PORTAL_SERVICES` > `./services.json` >
 | :--- | :--- |
 | `tools/start_public_gui.py` | One-click launcher: read manifest → start services → proxy → cloudflared tunnel |
 | `tools/tunnel_auth.py` | Password-login reverse proxy with multi-mount path routing (auth before forwarding) |
-| `tools/host_metrics.py` | Host metrics collection (CPU / memory / VRAM / GPU) |
 
 ```powershell
 python -X utf8 tools/start_public_gui.py --single-domain   # one domain + paths
@@ -148,8 +147,6 @@ python -X utf8 tools/start_public_gui.py --status / --stop
 | `tools/check_portal_auth.py` | 35 | Unauthenticated access allowed, forged/tampered/expired sessions, password stored in cookie, Basic Auth dialog |
 | `tools/check_tunnel_auth.py` | 35 | Auth bypass, prefix not stripped, wrong upstream, unknown prefix 200-fallback |
 | `tools/check_tunnel_domain.py` | 10 | Reusing the **previous** domain from append-only logs (530 publicly, fine locally) |
-| `tools/check_host_metrics.py` | 23 | Missing readings rendered as 0 (remote thinks the machine is idle) |
-| `tools/check_host_metrics_pages.py` | 23 | Pages not wired to the status bar / host page contract broken |
 | `tools/check_plugin.py` | 26 | Plugin exports contract, "running" reported while the service is dead |
 
 **A missing dependency must "skip and return 2", never silently pass** — that is the house rule.

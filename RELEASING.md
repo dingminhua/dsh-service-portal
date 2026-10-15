@@ -31,7 +31,6 @@ grep -F "Copyright (c) 2026 LaoDing" LICENSE
 ```powershell
 python -X utf8 tools\check_tunnel_auth.py
 python -X utf8 tools\check_tunnel_domain.py
-python -X utf8 tools\check_host_metrics.py
 python -X utf8 tools\check_plugin.py
 ```
 

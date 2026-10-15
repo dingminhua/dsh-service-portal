@@ -42,8 +42,7 @@
 - **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
 - **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点。
 - **控制检验**（本仓库硬纪律）—— 注册表 88 + 控制台 + 代理 + 认证 35 + 路由 35 项、
-  域名 10 项、机器状态 23+23 项；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
-- **机器状态采集** —— CPU / 内存 / 显存 / GPU 利用率，缺读数显示「—」绝不画成 0。
+  域名 10 项；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
 
 ## 工作原理
 
@@ -174,7 +173,6 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 | `tools/portal_login.py` | 口令登录 + 签名会话 cookie |
 | `tools/start_public_gui.py` | 旧版启动器（静态清单 + 单/多域名两种形态，仍可用） |
 | `tools/tunnel_auth.py` | 旧版认证代理（口令登录 + 多挂载点路径分流） |
-| `tools/host_metrics.py` | 机器状态采集（CPU / 内存 / 显存 / GPU 利用率） |
 
 ```powershell
 python -X utf8 tools/portal_run.py                 # 起门户（内网 + 外网隧道）
@@ -193,8 +191,6 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `tools/check_portal_auth.py` | 35 | 未登录被放行、会话可伪造/篡改/过期不失效、cookie 装了口令本身 |
 | `tools/check_tunnel_auth.py` | 35 | 认证被绕过、前缀没剥离、多挂载走错上游、未知前缀兜底成 200 |
 | `tools/check_tunnel_domain.py` | 10 | 追加日志取到**上一次的旧域名**（外网打开 530 而本地一切正常） |
-| `tools/check_host_metrics.py` | 23 | 读数缺失被画成 0（远程误以为机器空闲） |
-| `tools/check_host_metrics_pages.py` | 23 | 页面没接状态条 / 为接状态条改坏宿主页面契约 |
 | `tools/check_plugin.py` | 41 | DSH 插件 exports 契约、报告 running 却服务已死、口令形态配错 |
 
 ```powershell
@@ -204,7 +200,6 @@ python -X utf8 tools\check_portal_proxy.py
 python -X utf8 tools\check_portal_auth.py
 python -X utf8 tools\check_tunnel_auth.py
 python -X utf8 tools\check_tunnel_domain.py
-python -X utf8 tools\check_host_metrics.py
 python -X utf8 tools\check_plugin.py
 ```
 ```
