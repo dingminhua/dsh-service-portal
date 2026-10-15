@@ -139,6 +139,47 @@ test("家族一致性：图标与同族 dsh-connect-workbuddy 相同", () => {
   assert.equal(a[1], b[1], "家族图标漂移：与 dsh-connect-workbuddy 的图标不一致");
 });
 
+// ---------------------------------------------------------------------------
+// 渲染契约：section 组件必须能真正渲染出来。
+//
+// 血的教训（2026-10-15 实测）：客户端原本写 `const h = props.h`，但 DSH 把
+// section 组件渲染时**不传 h**（真实 ownerProps 只有 close，另外是一组
+// use*/snapshot hook）。于是 h === undefined，render 期抛
+// "h is not a function"，React 把整棵子树吞掉 —— 设置页左侧照常列出
+// 「对外服务门户」，点进去**右侧整片空白**，且没有任何可见错误。
+//
+// 下面几条就是对它的直接复现与防回归。
+// ---------------------------------------------------------------------------
+
+test("元素工厂不得从 props 取（DSH 的 section props 没有 h）", () => {
+  assert.doesNotMatch(
+    source,
+    /props\s*\.\s*h\b/,
+    "不能从 props 取 h：DSH 不给 section 组件这个 prop，"
+    + "取了会得到 undefined → 渲染期抛错 → 设置页空白",
+  );
+  assert.doesNotMatch(
+    bundle,
+    /props\s*\.\s*h\b/,
+    "产物里仍有 props.h：渲染会抛 'h is not a function'，面板空白",
+  );
+});
+
+test("元素工厂必须由模块级 React.createElement 定义", () => {
+  assert.match(
+    bundle,
+    /(?:var|const|let)\s+h\s*=\s*React\.createElement/,
+    "缺少模块级 h = React.createElement 定义",
+  );
+  assert.match(source, /const\s+h\s*=\s*React\.createElement/,
+    "源码缺少模块级 h 定义");
+});
+
+test("section 组件确实被注册进 settings.section（不是死代码）", () => {
+  assert.match(bundle, /"settings\.section"/);
+  assert.match(bundle, /ServicePortalSettingsTab/);
+});
+
 function statMs(path) {
   return statSync(path).mtimeMs;
 }

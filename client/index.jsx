@@ -17,6 +17,11 @@
 //   · 显示连接地址与**明文口令**（与 poker-viewer 同款选型：直接明文显示）
 //   · 明确警示：拿到口令 == 能启停被开放的服务
 
+// 元素创建别名：**不能**从 props 里取（DSH 的 section props 不含 h，
+// 取了会得到 undefined → 渲染期抛 "h is not a function" → 面板整片空白，
+// 而左侧导航照常显示，极难定位）。模块级定义一次即可。
+const h = React.createElement;
+
 const name = "dsh-service-portal";
 const inject = ["slots", "connection"];
 
@@ -98,8 +103,7 @@ function fmtTime(text) {
   return String(text);
 }
 
-function ServicePortalSettingsTab(props) {
-  const h = props.h;
+function ServicePortalSettingsTab() {
   const [status, setStatus] = React.useState(null);
   const [busy, setBusy] = React.useState("");
   const [error, setError] = React.useState(null);
