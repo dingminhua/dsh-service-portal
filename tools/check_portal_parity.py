@@ -49,9 +49,14 @@ def main():
           0 < client.index('}, "鼓励一下 ★"),')
           - client.index('key: "head"') < 900,
           "（距离标题行 900 字符内）")
-    check("灰色（label-tertiary）+ 下划线（与截图一致）",
-          'var(--dsw-alias-label-tertiary,#8b93a1)' in client
-          and 'textDecoration: "underline"' in client,
+    # 灰色 + 下划线（用户要的是低调灰，不要品牌蓝）。
+    # 注意：这里原来钉的是 `var(--dsw-alias-label-tertiary,#8b93a1)` —— 而那个
+    # 令牌**根本不存在**，等于一直在吃写死的灰。现在改用真实令牌 label-secondary，
+    # 所以这条断言改成看"意图"（灰 + 下划线 + 不是品牌蓝），不再绑具体令牌名。
+    check("灰色（非品牌蓝）+ 下划线（与截图一致）",
+          'color: COLOR.textMuted' in client
+          and 'textDecoration: "underline"' in client
+          and "creditLink" in client,
           "（不要品牌蓝 —— 用户要的是低调灰）")
     check("没有长鼓励文案残留",
           "顺手留颗 Star" not in client and "高兴一整天" not in client
@@ -126,6 +131,54 @@ def main():
     check("停止后一律重新拉状态（不信返回里的状态快照）",
           "await load();" in client
           and "// 一律重新拉状态" in client)
+
+    # ---- 排版：字号只能来自统一刻度，颜色只能用**真实存在**的主题令牌 ----
+    #
+    # 用户反馈「设置页面的字大大小小，样式难看」。查出来两个原因：
+    #   1. 字号从参考对象那儿一并抄了：面板里混着 11/12/13/14 四种，而相邻级差
+    #      只有 1px —— 看不出层级，只觉得忽大忽小；
+    #   2. 用了 4 个**不存在**的 --dsw-alias-* 令牌，它们永远不命中，于是一直
+    #      吃写死的浅色兜底：深色模式下文字和按钮就变成了浅色主题的颜色。
+    print("\n[排版：统一字号刻度 + 只用真实令牌]")
+    import re as _re
+
+    # 真实令牌清单来自宿主主题（cordis inspect Theme.listTokens），写死在这里做守卫：
+    # 以后谁再引用不存在的令牌，这条会拦下来。
+    real_tokens = {
+        "--dsw-alias-bg-base", "--dsw-alias-bg-layer-1", "--dsw-alias-bg-layer-2",
+        "--dsw-alias-bg-overlay", "--dsw-alias-border-l1", "--dsw-alias-border-l2",
+        "--dsw-alias-brand-primary", "--dsw-alias-label-primary",
+        "--dsw-alias-label-secondary", "--dsw-alias-state-error-primary",
+        "--dsw-alias-state-idle-primary", "--dsw-alias-state-success-primary",
+        "--dsw-alias-state-warn-primary", "--dsw-specific-sidebar-fill",
+    }
+    used_tokens = set(_re.findall(r"var\((--dsw-[a-z0-9-]+)", client))
+    fake = sorted(used_tokens - real_tokens)
+    check("只引用真实存在的主题令牌（不存在的会静默吃浅色兜底）",
+          not fake, "可疑令牌=%r" % (fake,))
+    # 已知曾经踩过的四个，单独钉一遍（含"别名"写法，防止换个名字又混进来）
+    for gone in ("--dsw-alias-label-tertiary", "--dsw-alias-state-warning-primary",
+                 "--dsw-alias-button-primary-fill",
+                 "--dsw-alias-label-primary-foreground"):
+        check("假令牌 %s 不再出现" % gone, gone not in client)
+
+    # 字号刻度：只允许 TYPE.*（刻度本身定义在 TYPE 里）
+    raw_sizes = _re.findall(r"fontSize:\s*(\d+)", client)
+    check("没有裸的数字字号（只能从 TYPE 刻度取）",
+          not raw_sizes, "裸字号=%r" % (raw_sizes,))
+    check("刻度是 4 级且单调（16/14/13/12）",
+          _re.search(r"title:\s*16[\s\S]{0,80}section:\s*14[\s\S]{0,80}"
+                     r"body:\s*13[\s\S]{0,80}caption:\s*12", client) is not None)
+    check("说明文字不小于 12（再小在缩放屏上会糊）",
+          "caption: 12" in client)
+    check("用 COLOR.* 统一取色（不再逐屏硬编码 hex）",
+          "const COLOR = {" in client
+          and client.count("rgba(22,163,74") == 0
+          and client.count("rgba(107,114,128") == 0)
+    check("间距用 SPACE 刻度，行内不写裸 marginTop 数字",
+          "const SPACE = {" in client
+          and not _re.search(r"marginTop:\s*\d", client),
+          "裸间距=%r" % (_re.findall(r"marginTop:\s*\d+", client),))
 
     # ---- 标题：本插件的身份文案，**不能照抄参考对象** ----
     # 踩过的坑：对齐 dsh-pocket 那轮把标题也一起抄了（「对外服务门户」→「手机访问」），

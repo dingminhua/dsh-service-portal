@@ -206,7 +206,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
-| `tools/check_portal_parity.py` | 66 | 设置页三处对标：缺右上角求 Star 区块、局域网口令与公网共用、**「自动选地址」只是显示不生效**；未启动状态逻辑（「启动于」出现在已停止旁、点不动的死按钮、看不到将用地址） |
+| `tools/check_portal_parity.py` | 76 | 设置页三处对标：缺右上角求 Star 区块、局域网口令与公网共用、**「自动选地址」只是显示不生效**；未启动状态逻辑；排版（字号刻度、只引用真实主题令牌） |
 | `tools/check_portal_stop_scope.py` | 13 | **`--stop` 顺手杀掉同端口上别人的进程**（用户正在跑的门户被检验脚本干掉）；停止后口令/候选被整份删掉 |
 | `tools/check_portal_shutdown.py` | 6 | 门户自退接口：局域网/公网来源必须被拒（不能从手机把门户关掉）、GET 不生效、**端口松了进程没退** |
 | `tools/check_plugin_stop.py` | 6 | 设置页「停止门户」真能停：**宿主派生进程杀不掉门户却报成功**（沙箱/作业隔离），改走"请门户自己退" |
@@ -271,8 +271,22 @@ python -X utf8 test\test_lan_address.py
 python -X utf8 test\test_lan_toggle.py
 python -X utf8 test\test_lan_switch.py
 python -X utf8 test\test_settings_data.py
-python -X utf8 test\test_host_buttons.py   # 需要 DSH 在跑
+python -X utf8 test\test_host_buttons.py   # 需要 DSH 在跑；宿主代码过期会跳过并返回 2
 ```
+
+### 改样式时怎么看效果（人工看图，不是自动检验）
+
+`tools/render_panel_preview.mjs` 把设置面板**真渲染**出来（直接 require
+`lib/client.js`，最小 React 替身 + 假 fetch），用无头 Chrome 截图肉眼核对：
+
+```powershell
+node tools\render_panel_preview.mjs          # 打印地址
+# 然后访问 /?s=running|public|off[&dark=1] 截图
+```
+
+它是**人工工具**，不进控制检验（要人看图，没法自动判过），而且有已知局限：
+替身 React 的文本排版不真实（截图里标题与副标题会"看起来压在一起"），
+只适合看结构顺序、颜色、胶囊形状、层级差别。局限写在文件头。
 
 ## 安全边界（必须如实理解）
 

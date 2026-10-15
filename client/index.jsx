@@ -42,132 +42,208 @@ const REPO_URL = "https://github.com/dingminhua/dsh-service-portal";
 const LAN_PIN_MIN = 6;
 const LAN_PIN_MAX = 12;
 
+// ============================================================================
+// 排版与间距刻度
+// ============================================================================
+//
+// 用户反馈「字大大小小，样式难看」。原因是字号从参考对象那儿一并抄了过来，
+// 面板里同时混着 11/12/13/14 四种字号，而且没有层级规则：
+//   · 标题 14、分区标题 13、正文 12、标签 12、徽标 11 —— 相邻级差只有 1px，
+//     视觉上"忽大忽小"却看不出层级（1px 的差别只会显得脏，不会显得有层次）；
+//   · 按钮 13、二维码说明 12、公告 12 —— 同一个"正文"概念在不同区块用了不同号。
+//
+// 现在收敛成一套 4 级刻度 + 8px 间距节奏，且**所有字号只能从这里取**：
+//   title 16 页面标题 / section 14 分区标题 / body 13 正文与控件 / caption 12 说明与徽标
+// 级差 ≥1px 且单调递减，字重跟着层级走（标题 600、分区 600、正文 400）。
+// 12 是**下限**：再小的说明文字在 2 倍缩放下会糊（对齐 UX 规范
+// 「关键文字不得低于 12pt」）。
+const TYPE = {
+  title: 16,
+  section: 14,
+  body: 13,
+  caption: 12,
+};
+
+// 8px 间距节奏：块间距 16、行间距 8、控件内部 4（对齐 UX 规范 4/8dp）
+const SPACE = {
+  block: 16,
+  row: 8,
+  inline: 4,
+};
+
+// 行高：正文 1.6 读起来松快，标题 1.3 收紧（对齐排版规范）
+const LINE = {
+  title: 1.3,
+  body: 1.6,
+};
+
+/**
+ * 面板里所有颜色都必须走这里。`--dsw-alias-*` 是宿主主题令牌，
+ * 深浅色各一套；写死 hex 只当令牌缺失时的兜底。
+ *
+ * 踩过的坑：以前用了 **4 个不存在的令牌**（`-label-tertiary`、
+ * `-state-warning-primary`、`-button-primary-fill`、`-label-primary-foreground`），
+ * 它们从来不会命中，于是一直吃写死的浅色兜底 —— 深色模式下文字和按钮
+ * 就成了浅色主题的颜色（对比度不够、按钮发白）。改用**真实存在**的令牌。
+ */
+const COLOR = {
+  textPrimary: "var(--dsw-alias-label-primary,inherit)",
+  textSecondary: "var(--dsw-alias-label-secondary,#6b7280)",
+  // 说明文字用 secondary：它是真实令牌；tertiary 不存在，硬编码的灰在深色下不可读
+  textMuted: "var(--dsw-alias-label-secondary,#6b7280)",
+  border: "var(--dsw-alias-border-l2,#e5e7eb)",
+  surface: "var(--dsw-alias-bg-layer-1,#fff)",
+  surfaceSubtle: "var(--dsw-alias-bg-layer-2,#f3f4f6)",
+  brand: "var(--dsw-alias-brand-primary,#4f6ef7)",
+  success: "var(--dsw-alias-state-success-primary,#16a34a)",
+  idle: "var(--dsw-alias-state-idle-primary,#9ca3af)",
+  warn: "var(--dsw-alias-state-warn-primary,#b45309)",
+  error: "var(--dsw-alias-state-error-primary,#dc2626)",
+};
+
 const styles = {
   card: {
-    background: "var(--dsw-alias-bg-layer-1,#fff)",
-    border: "1px solid var(--dsw-alias-border-l2,#e5e7eb)",
+    background: COLOR.surface,
+    border: "1px solid " + COLOR.border,
     borderRadius: 12, padding: "16px 20px", maxWidth: 560,
+    color: COLOR.textPrimary, fontSize: TYPE.body, lineHeight: LINE.body,
   },
-  head: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 },
+  head: {
+    display: "flex", alignItems: "center", gap: 10,
+    marginBottom: SPACE.block,
+  },
   icon: { borderRadius: 8, display: "block", flex: "0 0 auto" },
   title: {
-    fontSize: 14, fontWeight: 600,
-    color: "var(--dsw-alias-label-primary,inherit)",
+    fontSize: TYPE.title, lineHeight: LINE.title, fontWeight: 600,
+    color: COLOR.textPrimary,
   },
-  row: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  // 标题下的副标题（与标题同块，所以不额外加 margin）
+  subtitle: { fontSize: TYPE.caption, lineHeight: LINE.body, color: COLOR.textMuted },
+  row: { display: "flex", gap: SPACE.row, alignItems: "center", flexWrap: "wrap" },
   rowBetween: {
-    display: "flex", gap: 8, alignItems: "center",
+    display: "flex", gap: SPACE.row, alignItems: "center",
     justifyContent: "space-between", flexWrap: "wrap",
   },
   block: {
-    borderTop: "1px solid var(--dsw-alias-border-l2,#e5e7eb)",
-    marginTop: 14, paddingTop: 14,
+    borderTop: "1px solid " + COLOR.border,
+    marginTop: SPACE.block, paddingTop: SPACE.block,
   },
   sectionTitle: {
-    fontSize: 13, fontWeight: 600, marginBottom: 10,
-    color: "var(--dsw-alias-label-primary,inherit)",
+    fontSize: TYPE.section, lineHeight: LINE.title, fontWeight: 600,
+    marginBottom: SPACE.row, color: COLOR.textPrimary,
   },
-  muted: {
-    color: "var(--dsw-alias-label-tertiary,#8b93a1)",
-    fontSize: 12, lineHeight: 1.5,
+  // 嵌套在分区里的子标题（比如"公网访问密码"）：比 sectionTitle 小一级，
+  // 不用 sectionTitle 那样的大间距 —— 否则同一块里两级标题抢视线。
+  cardTitle: {
+    fontSize: TYPE.body, lineHeight: LINE.title, fontWeight: 600,
+    color: COLOR.textPrimary,
   },
-  label: {
-    color: "var(--dsw-alias-label-secondary,#6b7280)",
-    fontSize: 12, minWidth: 64,
-  },
+  muted: { color: COLOR.textMuted, fontSize: TYPE.caption, lineHeight: LINE.body },
+  // 与 muted 同字号，但用于"字段名"这种需要稍强一点的位置
+  label: { color: COLOR.textSecondary, fontSize: TYPE.body, minWidth: 64 },
   code: {
-    fontFamily: "ui-monospace,Menlo,monospace", fontSize: 12,
-    wordBreak: "break-all", margin: "4px 0",
-    color: "var(--dsw-alias-label-primary,inherit)",
+    fontFamily: "ui-monospace,Menlo,monospace", fontSize: TYPE.caption,
+    lineHeight: LINE.body, wordBreak: "break-all", margin: `${SPACE.inline}px 0`,
+    color: COLOR.textPrimary,
+  },
+  // 地址块里的每个地址占一行（<code> 是行内元素，并排会粘成一条）
+  codeBlock: {
+    display: "block",
+    fontFamily: "ui-monospace,Menlo,monospace", fontSize: TYPE.caption,
+    lineHeight: LINE.body, wordBreak: "break-all", margin: 0,
+    color: COLOR.textPrimary,
   },
   primary: {
     font: "inherit", cursor: "pointer", border: "none",
-    background: "var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary,#4f6ef7))",
-    color: "var(--dsw-alias-label-primary-foreground,#fff)",
+    background: COLOR.brand,
+    // 品牌色是深蓝，前景用白色；真实令牌里没有 foreground，用 #fff 兜底是安全的
+    color: "#fff",
     height: 32, padding: "0 14px", borderRadius: 999,
-    fontSize: 13, fontWeight: 500,
+    fontSize: TYPE.body, lineHeight: 1, fontWeight: 500,
   },
   btn: {
     font: "inherit", cursor: "pointer",
-    border: "1px solid var(--dsw-alias-border-l2,#d1d5db)",
-    background: "var(--dsw-alias-bg-layer-1,#fff)",
-    color: "var(--dsw-alias-label-primary,inherit)",
-    height: 32, padding: "0 14px", borderRadius: 999, fontSize: 13,
+    border: "1px solid " + COLOR.border,
+    background: COLOR.surface,
+    color: COLOR.textPrimary,
+    height: 32, padding: "0 14px", borderRadius: 999,
+    fontSize: TYPE.body, lineHeight: 1,
   },
   danger: {
     font: "inherit", cursor: "pointer",
-    border: "1px solid var(--dsw-alias-state-error-primary,#dc2626)",
-    background: "transparent",
-    color: "var(--dsw-alias-state-error-primary,#dc2626)",
-    height: 32, padding: "0 14px", borderRadius: 999, fontSize: 13,
+    border: "1px solid " + COLOR.error,
+    background: "transparent", color: COLOR.error,
+    height: 32, padding: "0 14px", borderRadius: 999,
+    fontSize: TYPE.body, lineHeight: 1,
   },
   warn: {
-    color: "var(--dsw-alias-state-warn-primary,#b45309)",
-    fontSize: 12, lineHeight: 1.6, marginTop: 8,
+    color: COLOR.warn, fontSize: TYPE.caption,
+    lineHeight: LINE.body, marginTop: SPACE.row,
   },
   err: {
-    color: "var(--dsw-alias-state-error-primary,#dc2626)",
-    fontSize: 12, lineHeight: 1.5, marginTop: 8, whiteSpace: "pre-wrap",
+    color: COLOR.error, fontSize: TYPE.caption, lineHeight: LINE.body,
+    marginTop: SPACE.row, whiteSpace: "pre-wrap",
   },
-  errInline: {
-    color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12,
-  },
+  errInline: { color: COLOR.error, fontSize: TYPE.caption },
   // 「自定义后不再自动轮换」这类提示：要显眼但不能像报错
-  warnInline: {
-    color: "var(--dsw-alias-state-warning-primary,#d97706)", fontSize: 12,
-  },
+  warnInline: { color: COLOR.warn, fontSize: TYPE.caption },
   // 右上角「鼓励一下 ★」：一句灰色下划线短链接（用户指定的最终形态）
   creditLink: {
-    color: "var(--dsw-alias-label-tertiary,#8b93a1)", fontSize: 12,
-    lineHeight: 1.6, textDecoration: "underline",
-    whiteSpace: "nowrap", flexShrink: 0, marginLeft: 12,
+    color: COLOR.textMuted, fontSize: TYPE.caption, lineHeight: LINE.body,
+    textDecoration: "underline", whiteSpace: "nowrap", flexShrink: 0,
+    marginLeft: 12,
   },
   tag: {
-    fontSize: 11, padding: "1px 7px", borderRadius: 999,
-    background: "rgba(107,114,128,.14)",
-    color: "var(--dsw-alias-label-tertiary,#8b93a1)",
+    fontSize: TYPE.caption, lineHeight: 1, padding: "3px 8px", borderRadius: 999,
+    background: COLOR.surfaceSubtle, color: COLOR.textSecondary,
   },
   radio: {
     display: "inline-flex", alignItems: "center", gap: 6,
-    fontSize: 13, cursor: "pointer",
-    color: "var(--dsw-alias-label-secondary,#6b7280)",
+    fontSize: TYPE.body, cursor: "pointer", color: COLOR.textSecondary,
   },
   input: {
-    font: "inherit", fontFamily: "ui-monospace,Menlo,monospace",
+    font: "inherit", fontSize: TYPE.body,
+    fontFamily: "ui-monospace,Menlo,monospace",
     height: 32, padding: "0 10px", borderRadius: 8, minWidth: 220,
-    border: "1px solid var(--dsw-alias-border-l2,#d1d5db)",
-    background: "var(--dsw-alias-bg-layer-1,#fff)",
-    color: "var(--dsw-alias-label-primary,inherit)",
+    border: "1px solid " + COLOR.border,
+    background: COLOR.surface, color: COLOR.textPrimary,
   },
   badge: (on) => ({
     display: "inline-flex", alignItems: "center", gap: 5,
-    fontSize: 12, padding: "2px 9px", borderRadius: 999,
-    background: on ? "rgba(22,163,74,.12)" : "rgba(107,114,128,.14)",
-    color: on ? "#16a34a" : "var(--dsw-alias-label-tertiary,#8b93a1)",
+    fontSize: TYPE.caption, lineHeight: 1, padding: "4px 9px", borderRadius: 999,
+    background: on
+      ? "color-mix(in srgb, " + COLOR.success + " 14%, transparent)"
+      : COLOR.surfaceSubtle,
+    color: on ? COLOR.success : COLOR.textSecondary,
   }),
   dot: (on) => ({
     width: 7, height: 7, borderRadius: 999,
-    background: on ? "#16a34a" : "#9ca3af",
+    background: on ? COLOR.success : COLOR.idle,
   }),
   qrBox: {
     display: "flex", flexDirection: "column", alignItems: "center",
-    margin: "10px 0 6px",
+    margin: `${SPACE.row}px 0 ${SPACE.inline}px`,
   },
   // 地址行：长 URL 要能换行（窄面板里不能撑破），复制按钮不被挤走
   addrRow: {
-    display: "flex", gap: 8, alignItems: "center",
-    justifyContent: "center", flexWrap: "wrap", marginTop: 8,
+    display: "flex", gap: SPACE.row, alignItems: "center",
+    justifyContent: "center", flexWrap: "wrap", marginTop: SPACE.row,
   },
   qrImg: {
-    width: 168, height: 168, imageRendering: "pixelated",
+    width: 176, height: 176, imageRendering: "pixelated",
     borderRadius: 8, background: "#fff", padding: 6,
-    border: "1px solid var(--dsw-alias-border-l2,#e5e7eb)",
+    border: "1px solid " + COLOR.border,
+  },
+  // 说明文字：用于"启动后会使用这些地址"这种小标题
+  addrLabel: {
+    fontSize: TYPE.caption, color: COLOR.textMuted,
+    lineHeight: LINE.body, marginBottom: SPACE.inline,
   },
   // iOS 风格小开关（与 dsh-pocket 的观感一致）
   switch: (on) => ({
     position: "relative", width: 44, height: 26, borderRadius: 999,
     border: "none", cursor: "pointer", flex: "0 0 auto", padding: 0,
-    background: on ? "#16a34a" : "var(--dsw-alias-border-l2,#d1d5db)",
+    background: on ? COLOR.success : COLOR.border,
     transition: "background .15s",
   }),
   knob: (on) => ({
@@ -175,6 +251,24 @@ const styles = {
     width: 20, height: 20, borderRadius: 999, background: "#fff",
     transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,.25)",
   }),
+  // 启动器输出：等宽小字，限高可滚
+  pre: {
+    fontFamily: "ui-monospace,Menlo,monospace", fontSize: TYPE.caption,
+    lineHeight: LINE.body, whiteSpace: "pre-wrap", maxHeight: 180,
+    overflow: "auto", margin: `${SPACE.inline}px 0 0`,
+    color: COLOR.textSecondary,
+  },
+  // 间距助手：行内不再写裸的 marginTop 数字，统一从这里取，
+  // 免得同一个面板里出现 8/10/14 三种"差不多"的间距。
+  gapTopSm: { marginTop: SPACE.row },
+  gapTopMd: { marginTop: SPACE.block },
+  // 分组容器：内部条目之间给一点呼吸
+  stack: { display: "flex", flexDirection: "column", gap: SPACE.inline },
+  // 详情行（标签 + 值）
+  detailRow: {
+    display: "flex", gap: SPACE.row, alignItems: "baseline",
+    flexWrap: "wrap", marginTop: SPACE.inline,
+  },
 };
 
 function fmtTime(text) {
@@ -463,7 +557,7 @@ function ServicePortalSettingsTab() {
     }),
     h("div", { style: { flex: 1, minWidth: 0 } },
       h("div", { style: styles.title }, "对外服务门户"),
-      h("div", { style: styles.muted },
+      h("div", { style: styles.subtitle },
         "手机扫码打开的就是门户控制台，在那里管理要开放的服务"),
     ),
     h("a", {
@@ -500,18 +594,22 @@ function ServicePortalSettingsTab() {
         + "（也可以同时开一个公网地址，人不在家时用）。"),
     ];
     if (planned.length) {
-      startRows.push(h("div", { key: "off-addrs", style: { marginTop: 8 } },
+      // 每个地址单独一行。踩过的坑：`<code>` 是行内元素，直接并列会连成
+      // "...:8899http://...:8899" —— 两个地址粘在一起，根本没法看。
+      // 真渲染出图才发现的（纯 HTML mock 发现不了，因为 mock 是手写的结构）。
+      startRows.push(h("div", { key: "off-addrs", style: styles.gapTopSm },
         h("div", { style: styles.addrLabel }, "启动后会使用这些地址"),
-        ...planned.map((url, i) =>
-          h("code", { key: "off-addr-" + i, style: styles.code }, url)),
+        h("div", { style: styles.stack },
+          ...planned.map((url, i) =>
+            h("code", { key: "off-addr-" + i, style: styles.codeBlock }, url))),
       ));
     } else {
       startRows.push(h("div", { key: "off-noaddr",
-        style: Object.assign({}, styles.muted, { marginTop: 8 }) },
+        style: Object.assign({}, styles.muted, styles.gapTopSm) },
         "还没探测过网卡地址：启动时会自动选一个（内网地址和二维码随后显示在这里）。"));
     }
     startRows.push(h("div", { key: "off-btns",
-      style: Object.assign({}, styles.row, { marginTop: 10 }) },
+      style: Object.assign({}, styles.row, styles.gapTopSm) },
       h("button", {
         style: styles.primary, type: "button", disabled: !!busy,
         onClick: () => doStart(true),
@@ -569,7 +667,7 @@ function ServicePortalSettingsTab() {
     // 局域网访问密码行
     lanRows.push(h("div", { key: "lan-pin", style: styles.rowBetween },
       h("div", null,
-        h("div", { style: styles.sectionTitle, marginBottom: 2 }, "局域网访问密码"),
+        h("div", { style: styles.cardTitle }, "局域网访问密码"),
         h("div", { style: styles.muted },
           lanAuth
             ? "已开启：同一 WiFi 打开也要输口令"
@@ -719,7 +817,7 @@ function ServicePortalSettingsTab() {
     ));
     pubRows.push(h("div", { key: "pub-pin", style: styles.rowBetween },
       h("div", null,
-        h("div", { style: styles.sectionTitle, marginBottom: 2 }, "公网访问密码"),
+        h("div", { style: styles.cardTitle }, "公网访问密码"),
         h("div", { style: styles.muted }, "每次开启公网都会换新；也可在控制台里改"),
       ),
       h("span", { style: styles.tag },
@@ -772,7 +870,7 @@ function ServicePortalSettingsTab() {
   // 未启动时的启动按钮已经在上面「门户未启动」块里了，这里不重复。
   if (running) {
     children.push(h("div", { key: "actions",
-      style: Object.assign({}, styles.row, { marginTop: 14 }) },
+      style: Object.assign({}, styles.row, styles.gapTopMd) },
       h("button", { style: styles.danger, type: "button", disabled: !!busy,
                     onClick: doStop },
         busy === "stop" ? "停止中…" : "停止门户"),
@@ -803,9 +901,7 @@ function ServicePortalSettingsTab() {
   if (output && output.stdout && !running) {
     children.push(h("div", { key: "out", style: styles.block },
       h("div", { style: styles.muted }, "启动器输出"),
-      h("pre", { style: Object.assign({}, styles.code,
-        { whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto" }) },
-        String(output.stdout).slice(-1200)),
+      h("pre", { style: styles.pre }, String(output.stdout).slice(-1200)),
     ));
   }
   // status.problem：**没在跑**时是普通说明（用户自己停的也算，不该红字报警）；
@@ -823,7 +919,7 @@ function ServicePortalSettingsTab() {
       position: "fixed", left: "50%", top: "50%",
       transform: "translate(-50%, -50%)", zIndex: 10001,
       background: "rgba(17,24,39,.92)", color: "#fff",
-      padding: "10px 18px", borderRadius: 10, fontSize: 13,
+      padding: "10px 18px", borderRadius: 10, fontSize: TYPE.body,
       boxShadow: "0 8px 24px rgba(0,0,0,.28)", pointerEvents: "none",
     },
   }, toast));
