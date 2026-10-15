@@ -1,0 +1,41 @@
+{
+  "name": "dsh-poker-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ld-rl-poker 训练配置台与模型查看台的外网开关：一键开启/关闭 cloudflared 隧道 + Basic Auth 代理（随机域名 + 随机口令），在 DSH 设置页显示连接与口令。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "icon": "icons/dsh-poker-viewer-128.png",
+  "files": [
+    "lib",
+    "icons",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "license": "MIT"
+}

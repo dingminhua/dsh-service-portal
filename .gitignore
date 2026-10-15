@@ -1,0 +1,13 @@
+# 运行产物
+runs/
+
+# 真实服务清单（可能含本机路径/端口，不强制入库；示例见 services.example.json）
+services.json
+
+# DSH 插件依赖（link 安装时不产生，独立安装时会有）
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv*/
