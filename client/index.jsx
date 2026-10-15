@@ -257,7 +257,39 @@ function ServicePortalSettingsTab() {
   // 连接信息
   if (status && status.ok !== false) {
     const rows = [];
-    if (status.baseUrl) {
+    // 新门户形态：内网 + 外网两条入口，控制台就是入口本身
+    if (status.kind === "portal") {
+      const lanList = status.lanUrls || [];
+      if (lanList.length) {
+        rows.push(h("div", { key: "lan-label", style: styles.muted },
+          "内网访问（同一 WiFi 直接打开，无需口令）"));
+        for (let i = 0; i < lanList.length; i++) {
+          rows.push(h("div", { key: "lan-" + i, style: styles.row },
+            h("span", { style: styles.label }, i === 0 ? "内网" : "内网 " + (i + 1)),
+            h("a", {
+              href: lanList[i], target: "_blank", rel: "noreferrer",
+              style: Object.assign({}, styles.code,
+                { color: "var(--dsw-alias-brand-primary,#4f6ef7)" }),
+            }, lanList[i]),
+          ));
+        }
+      }
+      rows.push(h("div", { key: "pub-label", style: styles.muted },
+        status.publicUrl
+          ? "外网访问（需输入口令）"
+          : "外网访问：未开启（可用「开启外网访问」建隧道）"));
+      if (status.publicUrl) {
+        rows.push(h("div", { key: "public", style: styles.row },
+          h("span", { style: styles.label }, "外网"),
+          h("a", {
+            href: status.publicUrl, target: "_blank", rel: "noreferrer",
+            style: Object.assign({}, styles.code,
+              { color: "var(--dsw-alias-brand-primary,#4f6ef7)" }),
+          }, status.publicUrl),
+        ));
+      }
+    }
+    if (status.baseUrl && status.kind !== "portal") {
       rows.push(h("div", { key: "base", style: styles.row },
         h("span", { style: styles.label }, "入口"),
         h("a", {
@@ -266,7 +298,7 @@ function ServicePortalSettingsTab() {
         }, status.baseUrl),
       ));
     }
-    for (const ep of status.endpoints || []) {
+    for (const ep of status.kind === "portal" ? [] : (status.endpoints || [])) {
       rows.push(h("div", { key: "ep-" + ep.key, style: styles.row },
         h("span", { style: styles.label }, ep.name || ep.key),
         h("a", {
@@ -347,11 +379,18 @@ function ServicePortalSettingsTab() {
 
   // 操作按钮
   children.push(h("div", { key: "actions", style: Object.assign({}, styles.row, { marginTop: 14 }) },
+    // 控制台入口：门户自己就是控制台，在页面上管理服务
+    running && status && status.portalUrl
+      ? h("a", {
+          href: status.portalUrl, target: "_blank", rel: "noreferrer",
+          style: Object.assign({}, styles.primary, { textDecoration: "none" }),
+        }, "打开控制台")
+      : null,
     h("button", {
       style: styles.primary, type: "button",
       disabled: !!busy || running,
       onClick: doStart,
-    }, busy === "start" ? "启动中…" : (running ? "已开启" : "开启外网访问")),
+    }, busy === "start" ? "启动中…" : (running ? "运行中" : "开启门户")),
     h("button", {
       style: styles.danger, type: "button",
       disabled: !!busy || !running,
@@ -360,12 +399,14 @@ function ServicePortalSettingsTab() {
     h("button", { style: styles.btn, type: "button", onClick: load }, "刷新"),
   ));
 
-  // 警示（明文口令的后果必须讲清楚）
+  // 警示（口令的后果必须讲清楚）
   children.push(h("div", { key: "warn", style: styles.warn },
-    "⚠ 该入口使本机服务可从外网访问：拿到口令的人可以启停被开放的服务。" +
+    "⚠ 开启后本机服务可从外网访问：拿到口令的人可以启停被开放的服务。" +
     (running && status && status.passwordMode === "fixed"
-      ? "当前用的是**固定口令**：多次开启口令不变，一旦泄漏就是长期有效。"
-      : "口令每次开启都会更新。") +
+      ? "当前用的是固定口令：多次开启口令不变，一旦泄漏就是长期有效。"
+      : (status && status.kind === "portal"
+          ? "内网访问免密；外网访问必须口令。"
+          : "口令每次开启都会更新。")) +
     "不用时请点「关闭」。"
   ));
 
