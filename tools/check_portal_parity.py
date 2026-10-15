@@ -66,6 +66,26 @@ def main():
     check("有 title 提示（短文案也能让人知道点了做什么）",
           'title: "去 GitHub' in client)
 
+    # ---- 访问地址：二维码 + 可复制，两条路都要在 ----
+    # 用户先说「不要二维码了，地址可复制」，随后改口「还是恢复之前的二维码吧」。
+    # 最终形态 = 二维码 + 地址 + 复制按钮：扫码适合当面把手机接过去，
+    # 复制适合把地址贴进聊天窗发人。两条路对应不同场景，都留着。
+    print("\n[访问地址：二维码 + 复制按钮]")
+    check("局域网二维码还在", "局域网二维码" in client and "qrs[lanPrimary]" in client)
+    check("公网二维码还在", "公网二维码" in client and "qrs[publicUrl]" in client)
+    check("地址有复制按钮（局域网）",
+          'copyText("lan", lanPrimary)' in client)
+    check("地址有复制按钮（公网）",
+          'copyText("public", publicUrl)' in client)
+    check("复制后有「已复制」反馈（不是点了没反应）",
+          'copied === "lan" ? "已复制"' in client
+          and 'copied === "public" ? "已复制"' in client)
+    check("剪贴板不可用时有兜底（内网 http 非安全上下文会没有 clipboard API）",
+          "execCommand" in client and "fallbackCopy" in client,
+          "（没有兜底时按钮点了会静默失效）")
+    check("地址行样式 addrRow 在（长 URL 可换行、按钮不被挤走）",
+          "addrRow:" in client and 'flexWrap: "wrap"' in client)
+
     # ---- 标题：本插件的身份文案，**不能照抄参考对象** ----
     # 踩过的坑：对齐 dsh-pocket 那轮把标题也一起抄了（「对外服务门户」→「手机访问」），
     # 副标题也换成了它的「实时同步」。用户一眼看出不对。

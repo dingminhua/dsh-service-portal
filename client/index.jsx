@@ -13,9 +13,12 @@
 // 与 LaoDing 插件家族同一张 64px 品牌图）。
 //
 // 界面形态（2026-10-15 重做，对齐 dsh-pocket 的设置页）：
-//   · 局域网区块：总开关 + 二维码 + 地址 + 访问密码（开关/刷新/自定义）+ 高级选地址
-//   · 公网区块：开关 + 二维码 + 地址 + 访问密码
+//   · 局域网区块：总开关 + 二维码 + 地址（可复制）+ 访问密码（开关/刷新/自定义）+ 高级选地址
+//   · 公网区块：开关 + 二维码 + 地址（可复制）+ 访问密码
 //   · 扫码打开的就是门户控制台（在那里管理要开放的服务）
+//
+// 地址旁边同时给「复制」：扫码适合当面用手机接过去，复制适合把地址贴进聊天窗
+// 发给别人 —— 两条路留给不同场景（用户要求地址可复制）。
 //
 // 与 dsh-pocket 的一个本质区别（诚实说明）：dsh-pocket 的二维码指向**一个目标**
 // （DSH 的 web 界面），我们的二维码指向**门户控制台**——扫码后是一个可管理多个
@@ -150,6 +153,11 @@ const styles = {
     display: "flex", flexDirection: "column", alignItems: "center",
     margin: "10px 0 6px",
   },
+  // 地址行：长 URL 要能换行（窄面板里不能撑破），复制按钮不被挤走
+  addrRow: {
+    display: "flex", gap: 8, alignItems: "center",
+    justifyContent: "center", flexWrap: "wrap", marginTop: 8,
+  },
   qrImg: {
     width: 168, height: 168, imageRendering: "pixelated",
     borderRadius: 8, background: "#fff", padding: 6,
@@ -193,6 +201,40 @@ function ServicePortalSettingsTab() {
 
   // 二维码：按地址缓存（地址不变就不重复要，避免每次轮询都打门户口）
   const [qrs, setQrs] = React.useState({});
+
+  // 地址「复制」后的短暂反馈（"已复制" → 1.5 秒后恢复）
+  const [copied, setCopied] = React.useState("");
+  const copyTimer = React.useRef(null);
+  const copyText = (key, text) => {
+    const done = () => {
+      setCopied(key);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(""), 1500);
+    };
+    // 面板可能跑在非安全上下文（http 内网地址）里，clipboard API 会不可用 ——
+    // 那种情况退回 execCommand，保证「复制」按钮永远真的能复制。
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text) && done());
+        return;
+      }
+    } catch { /* 落到 fallback */ }
+    if (fallbackCopy(text)) done();
+  };
+  const fallbackCopy = (text) => {
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(area);
+      return ok;
+    } catch { return false; }
+  };
   // 局域网访问密码开关（默认关 = 免密）
   const [lanAuth, setLanAuth] = React.useState(null);
   // 局域网访问总开关（默认开）
@@ -456,8 +498,15 @@ function ServicePortalSettingsTab() {
               display: "flex", alignItems: "center", justifyContent: "center",
               opacity: 0.4 }),
             }, h("span", { style: styles.muted }, "已关闭")),
-        h("code", { style: Object.assign({}, styles.code, { marginTop: 8 }) },
-          lanPrimary),
+        // 地址 + 复制：扫码是「用手机接过去」，复制是「贴到聊天窗发出去」，
+        // 两条路都要留（用户明确要求地址可复制）。
+        h("div", { style: styles.addrRow },
+          h("code", { style: styles.code }, lanPrimary),
+          h("button", {
+            style: styles.btn, type: "button",
+            onClick: () => copyText("lan", lanPrimary),
+          }, copied === "lan" ? "已复制" : "复制"),
+        ),
         h("div", { style: styles.muted },
           lanEnabled
             ? "手机连接同一 WiFi 后扫码即可打开"
@@ -607,8 +656,13 @@ function ServicePortalSettingsTab() {
         : h("div", { style: Object.assign({}, styles.qrImg, {
             display: "flex", alignItems: "center", justifyContent: "center" }),
           }, h("span", { style: styles.muted }, "二维码生成中…")),
-      h("code", { style: Object.assign({}, styles.code, { marginTop: 8 }) },
-        publicUrl),
+      h("div", { style: styles.addrRow },
+        h("code", { style: styles.code }, publicUrl),
+        h("button", {
+          style: styles.btn, type: "button",
+          onClick: () => copyText("public", publicUrl),
+        }, copied === "public" ? "已复制" : "复制"),
+      ),
       h("div", { style: styles.muted }, "人在外面也能打开（需要口令）"),
     ));
     pubRows.push(h("div", { key: "pub-pin", style: styles.rowBetween },
