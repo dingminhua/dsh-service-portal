@@ -31,30 +31,44 @@
 
 ## 功能特性
 
-- **一键对外开放本机服务** —— 设置页点「开启」即拉服务 → 起认证代理 → 建 tunnel，全程无手工步骤。
-- **只需口令，不要账号** —— 访问时是一个自定义登录页（只有口令输入框），
-  不弹浏览器原生的「账号 + 密码」框。
-- **口令两种形态** —— ① 每次开启**自动随机生成**（默认，泄露窗口最小）；
-  ② 你自己设一个**固定口令**（省事，但一旦泄露就是长期有效，设置页会明确提示）。
-- **随机域名** —— 每次启动都换，域名与口令一起构成一道短命入口。
-- **两种形态**：每个服务一个独立随机域名，或**单域名 + 路径前缀**（`https://<随机>/train/`）。
-- **服务清单驱动** —— 写 `services.json` 就能开放任意服务，无需改代码；不填则用内置默认
-  （ld-rl-poker 的两个 GUI，保持向后兼容）。
-- **控制检验**（本仓库硬纪律）—— 认证 35 + 路由 35 项、域名解析 10 项、机器状态 23+23 项、
-  插件契约 41 项检验；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
+- **自带控制台网页** —— 门户本身就是一张网页：在页面上增删要开放的服务、设置路由路径、
+  逐个开关，开启后点链接直接访问。**不用改配置文件、不用重启**。
+- **内网 + 外网两种访问** —— 同一张页面，两条入口：
+  - 内网（`http://192.168.x.x:8899`）**免密**，同一 WiFi 下手机/平板直接打开；
+  - 外网（`https://<随机>.trycloudflare.com`）**必须口令**，人在外面也能用。
+- **手机扫码即用** —— 控制台显示二维码，手机扫一下就到（页面按窄屏自适应）。
+- **只需口令，不要账号** —— 自定义登录页（只有口令输入框），不弹浏览器原生
+  「账号 + 密码」框；口令可**每次随机**或**你自己设固定值**。
+- **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
+- **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点。
+- **控制检验**（本仓库硬纪律）—— 注册表 88 + 控制台 + 代理 + 认证 35 + 路由 35 项、
+  域名 10 项、机器状态 23+23 项；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
 - **机器状态采集** —— CPU / 内存 / 显存 / GPU 利用率，缺读数显示「—」绝不画成 0。
 
 ## 工作原理
 
 ```
-https://<随机>.trycloudflare.com   (cloudflared quick tunnel，域名每次启动都换)
-              |
-              v
-127.0.0.1:<proxyPort>  tools/tunnel_auth.py（口令登录 + 会话 cookie，认证在转发之前）
-              |
-              v
-127.0.0.1:<guiPort>  本机服务（GUI / Ollama / 任何 HTTP 服务）
+                    ┌─────────── 门户进程（一个端口，默认 8899）───────────┐
+ 内网 http://192.168.x.x:8899 ──┤                                        │
+                                ├──▶ 按 Host 分类：loopback / lan / public │
+ 外网 https://<随机>.trycloudflare.com ─┘    │                            │
+                                            ├─ /            → 控制台页（管理服务）
+                                            ├─ /_auth/login → 口令登录（外网）
+                                            ├─ /_api/*      → 控制台 API
+                                            └─ /<路由路径>/… → 转发到对应服务
 ```
+
+**认证强度按来源区分**（照搬 dsh-pocket 的模型，见[致谢](#致谢)）：
+
+| Host 分类 | 判定 | 控制台 / 服务 |
+| :--- | :--- | :--- |
+| `loopback` | `localhost`、`127.x`、`::1` | 免密 |
+| `lan` | RFC1918 私网、CGNAT(100.64/10)、`.local`、单标签名 | 免密 |
+| `public` | **其余一切**（含你自建域名） | **必须口令** |
+
+> 兜底方向是**安全的一侧**：认不出的 Host 一律当公网。反着写（只把 `*.trycloudflare.com`
+> 当外网、其余当内网）会让人挂个自己的域名就绕过认证——dsh-pocket 踩过这个坑
+> （它的 issue #66），本项目直接按 fail-closed 实现。
 
 ## 安装
 
@@ -120,48 +134,63 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 未知子路径返回 **404**（不拿 status 兜底——拼错的路径不许「看起来能用」）。
 
-## 服务清单
+## 在控制台上管理服务
 
-不填任何配置时用内置清单（= ld-rl-poker 的两个 GUI）。要开放别的服务就写 `services.json`：
+打开门户地址就是控制台。每个服务一条卡片：
 
-```json
-{
-  "hostRepo": "D:\\DshProject\\ld-rl-poker",
-  "services": [
-    {"key": "train",  "script": "gui/server.py",        "guiPort": 8810,
-     "proxyPort": 8890, "name": "训练配置台", "mount": "train"},
-    {"key": "ollama", "script": "serve.py",             "guiPort": 11434,
-     "proxyPort": 11499, "name": "Ollama",   "mount": "ollama"}
-  ]
-}
-```
+| 操作 | 说明 |
+| :--- | :--- |
+| **添加服务** | 填 名称 / 路由路径（如 `/ollama`）/ 上游地址（如 `127.0.0.1:11434`）/ 备注 |
+| **开启 · 关闭** | 逐服务切换。开启时会尝试拉起它的脚本（若配了 `script`），关闭后该路由**立即 404** |
+| **访问** | 已启用的服务显示可点链接，直达 `/<路由路径>/`；未启用的**置灰不可点** |
+| **编辑 / 删除** | 改路径、上游、备注；删除会先停掉它拉起的进程 |
+| **状态** | 绿=已启用且存活，灰=未启用，红=存活探测失败（不是 0 值假象） |
 
-优先级：`--services <json>` > `$SERVICE_PORTAL_SERVICES` > `./services.json` > 内置清单。
+改动**立即落盘**（`runs/portal_registry.json`）并生效，不用重启门户、不用重建隧道。
 
-- `hostRepo`：服务脚本所在的宿主仓库根（脚本路径相对它解析）；
-- `script` / `guiPort`：被拉起的服务与其端口；
-- `proxyPort`：非单域名模式下每个服务各自的认证代理端口；
-- `mount`：单域名模式下的路径前缀（`/train/`）。
+服务条目字段：
+
+| 字段 | 必填 | 说明 |
+| :--- | :--- | :--- |
+| `key` | ✓ | 唯一标识，`[a-zA-Z0-9_-]{1,32}`，不能与保留字冲突 |
+| `name` | ✓ | 显示名（≤64 字符，页面会 HTML 转义） |
+| `mount` | ✓ | 路由路径，以 `/` 开头；不能与其他启用项重复、不能占用 `/_auth` `/_api` |
+| `target` | ✓ | 上游 `host:port` |
+| `script` | | 拉起用的脚本（相对 `hostRepo`）；不填则要求服务已自行运行 |
+| `enabled` | | 是否对外开放（页面开关） |
+| `autoStart` | | 门户启动时是否自动拉起 |
+
+> 命令行也能直接改（等同页面操作）：
+> `POST /_api/services`、`POST /_api/services/<key>/enable|disable|restart|delete|update`。
 
 ## 工具（也可脱离插件直接用）
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `tools/start_public_gui.py` | 一键启动：读清单 → 拉服务 → 起代理 → 建 cloudflared 隧道 |
-| `tools/tunnel_auth.py` | 口令登录 + 多挂载点路径分流反向代理（认证在转发之前） |
+| `tools/portal_run.py` | **门户启动器**：起控制台 + 内网/外网双入口 + 服务进程托管 |
+| `tools/portal_proxy.py` | 按 Host 分类认证的反向代理（内网免密 / 外网口令） |
+| `tools/portal_console.py` | 控制台页面渲染 + 二维码（纯 Python，无依赖） |
+| `tools/portal_registry.py` | 服务注册表（运行时增删改查 + 原子落盘） |
+| `tools/portal_login.py` | 口令登录 + 签名会话 cookie |
+| `tools/start_public_gui.py` | 旧版启动器（静态清单 + 单/多域名两种形态，仍可用） |
+| `tools/tunnel_auth.py` | 旧版认证代理（口令登录 + 多挂载点路径分流） |
 | `tools/host_metrics.py` | 机器状态采集（CPU / 内存 / 显存 / GPU 利用率） |
 
 ```powershell
-python -X utf8 tools/start_public_gui.py --single-domain   # 单域名+路径
-python -X utf8 tools/start_public_gui.py                   # 两个独立随机域名
-python -X utf8 tools/start_public_gui.py --status / --stop
+python -X utf8 tools/portal_run.py                 # 起门户（内网 + 外网隧道）
+python -X utf8 tools/portal_run.py --lan-only      # 只开内网
+python -X utf8 tools/portal_run.py --port 8899     # 指定端口
+python -X utf8 tools/portal_run.py --status / --stop
 ```
 
 ## 控制检验
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
-| `tools/check_portal_auth.py` | 35 | 未登录被放行、会话可伪造/篡改/过期不失效、cookie 装了口令本身、退回 Basic Auth 弹框 |
+| `tools/check_portal_registry.py` | 88 | 路由重复/非法、key 冲突、**改完不落盘**（重启就丢）、坏文件崩溃 |
+| `tools/check_portal_console.py` | — | 未启用服务可点、服务名里塞 `<script>`（存储型 XSS）、二维码不确定 |
+| `tools/check_portal_proxy.py` | — | **自建域名被误判成内网**、认证未前置、限速失效、`cf-connecting-ip` 被伪造 |
+| `tools/check_portal_auth.py` | 35 | 未登录被放行、会话可伪造/篡改/过期不失效、cookie 装了口令本身 |
 | `tools/check_tunnel_auth.py` | 35 | 认证被绕过、前缀没剥离、多挂载走错上游、未知前缀兜底成 200 |
 | `tools/check_tunnel_domain.py` | 10 | 追加日志取到**上一次的旧域名**（外网打开 530 而本地一切正常） |
 | `tools/check_host_metrics.py` | 23 | 读数缺失被画成 0（远程误以为机器空闲） |
@@ -169,11 +198,15 @@ python -X utf8 tools/start_public_gui.py --status / --stop
 | `tools/check_plugin.py` | 41 | DSH 插件 exports 契约、报告 running 却服务已死、口令形态配错 |
 
 ```powershell
+python -X utf8 tools\check_portal_registry.py
+python -X utf8 tools\check_portal_console.py
+python -X utf8 tools\check_portal_proxy.py
+python -X utf8 tools\check_portal_auth.py
 python -X utf8 tools\check_tunnel_auth.py
 python -X utf8 tools\check_tunnel_domain.py
 python -X utf8 tools\check_host_metrics.py
-python -X utf8 tools\check_host_metrics_pages.py   # 需宿主页面（SERVICE_PAGES_DIR）
 python -X utf8 tools\check_plugin.py
+```
 ```
 
 **依赖缺失必须「跳过并返回 2」，不得静默通过**——这是本项目的硬纪律。
@@ -221,8 +254,53 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
 ## 未做
 
 - **固定自有域名**：需要 named tunnel + ingress。现在每次启动都是随机 trycloudflare 域名。
-- **运行时热改挂载表**：当前改服务清单要重启启动器（会换域名）。
-- **门户页交互 UI**：现在根路径只有一张静态列表，不是可点击开关的面板。
+- **cloudflared 自动下载**：本项目复用本机已有的那份（dsh-pocket 会多镜像源下载）。
+- **服务健康检查定时刷新**：现在是页面刷新时探测存活，没有后台定时器。
+
+## 致谢
+
+本项目的**门户形态**（控制台网页、内网+外网双入口、按 Host 分类的认证强度）明确参照了：
+
+### [shaobeichen/dsh-pocket](https://github.com/shaobeichen/dsh-pocket)
+
+> 「把 DeepSeek Harness 装进你的口袋：一个包、一个设置页，手机扫码即同步访问电脑上的
+> DSH（局域网 + 公网，实时同屏）。」 —— GPL-2.0
+
+**我们从它学到的设计**（逐条对应到本项目的实现）：
+
+| 它的做法 | 我们的实现 |
+| :--- | :--- |
+| `classifyHost()` 把 Host 分成 `loopback` / `lan` / `public`，按类别决定认证强度 | `tools/portal_proxy.py::classify_host()`，同一套三分类 |
+| **fail-closed**：认不出的 Host 一律当公网（它曾因反着写被绕过，issue #66） | 同样 fail-closed，并有 20 项分类控制检验（含「自建域名必须判为公网」） |
+| 公网始终要密码；局域网可开关；loopback 免密 | 内网免密、外网必须口令（用户选定） |
+| 登录限速：单 IP 5 次失败锁 60s + 全局阈值 | `RateLimiter`，同样的阈值策略 |
+| `cf-connecting-ip` 只在源地址是 loopback 时信任 | `client_ip()`，同一条判定（防伪造绕过限速） |
+| 自定义登录页（不弹浏览器原生认证框） | `tools/portal_login.py` |
+| 手机扫码即用（二维码 + 移动端适配） | `tools/portal_console.py`（纯 Python 生成 SVG 二维码，不引入依赖） |
+
+**同时说明清楚**：本项目**没有复制 dsh-pocket 的任何代码**。
+
+- 它是 JavaScript（`lib/proxy.mjs` / `lib/tunnel.mjs` / `client/`），本项目的门户是独立的
+  Python 实现（`tools/portal_*.py`），两侧语言、结构与命名均不同；
+- 双方暴露的 HTTP 接口、口令存储格式、配置文件格式都不兼容；
+- 我们借用的是**设计判断**（尤其是 fail-closed 的兜底方向、限速阈值、IP 信任边界这类
+  「用血换来的结论」），实现是从零写的。
+
+因此本项目的 MIT 许可不受其 GPL-2.0 **传染**：GPL 约束的是衍生作品的代码分发，而
+「参考设计思路、独立实现」不构成衍生作品。我们仍在此**明确致谢并标注其许可**，
+一是尊重原作者，二是让读者能自己判断。
+
+> 如果将来要在本项目里**直接搬运它的代码**，那就必须整体转为 GPL-2.0 ——
+> 请勿在未确认的情况下混入其源码片段。
+
+### 其他
+
+- [cloudflared](https://github.com/cloudflare/cloudflared)（Apache-2.0）—— 公网隧道。
+- [mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT）——
+  dsh-pocket 的移动端适配移植自它，本项目未直接使用，但移动端设计的源头在此。
+- 插件家族的卡片样式与品牌图标来自 `dingminhua/dsh-connect-workbuddy` 等同族插件。
+
+完整的第三方清单与许可要求见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 许可证
 

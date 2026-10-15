@@ -198,8 +198,55 @@ $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-r
 
 - **Fixed custom domain**: needs a named tunnel + ingress. Today every start gets a random
   trycloudflare domain.
-- **Hot-reloadable mount table**: changing the manifest requires restarting the launcher (new domain).
-- **Interactive portal page**: the root path is a static list, not a clickable control panel.
+- **Auto-download of cloudflared**: we reuse the local copy (dsh-pocket downloads it from mirrors).
+- **Periodic health refresh**: liveness is probed on page refresh, not by a background timer.
+
+## Credits
+
+The **portal shape** of this project (console web page, internal + external entrances, authentication
+strength decided by Host class) explicitly follows:
+
+### [shaobeichen/dsh-pocket](https://github.com/shaobeichen/dsh-pocket)
+
+> "Put DeepSeek Harness in your pocket: one package, one settings page, scan a QR code on your phone
+> to reach the DSH on your computer (LAN + public, live mirror)." — GPL-2.0
+
+**What we learned from it** (each item maps to an implementation here):
+
+| Its approach | Ours |
+| :--- | :--- |
+| `classifyHost()` splits Host into `loopback` / `lan` / `public` and picks auth strength per class | `tools/portal_proxy.py::classify_host()`, same three classes |
+| **fail-closed**: an unrecognised Host counts as public (it was once bypassed by doing the opposite, issue #66) | Same fail-closed rule, plus 20 host-classification checks (including "a self-hosted domain must be public") |
+| Public always needs a password; LAN can be toggled; loopback is free | LAN password-free, public password-required (user's choice) |
+| Login rate limiting: 5 failures per IP → 60s lock, plus a global threshold | `RateLimiter`, same thresholds |
+| `cf-connecting-ip` trusted only when the source is loopback | `client_ip()`, same rule (a forged header cannot bypass the limiter) |
+| Custom login page instead of the browser's native auth dialog | `tools/portal_login.py` |
+| Scan-and-go on mobile (QR code + mobile layout) | `tools/portal_console.py` (SVG QR generated in pure Python, no new dependency) |
+
+**To be explicit: no code was copied from dsh-pocket.**
+
+- It is JavaScript (`lib/proxy.mjs` / `lib/tunnel.mjs` / `client/`); this project's portal is an
+  independent Python implementation (`tools/portal_*.py`) with different structure and naming.
+- Their HTTP endpoints, token storage format and config format are all incompatible with ours.
+- What we borrowed is **design judgement** (the fail-closed direction, rate-limit thresholds, the IP
+  trust boundary — conclusions that cost someone a security incident), implemented from scratch.
+
+So this project's MIT licence is **not** infected by its GPL-2.0: GPL governs distribution of
+derivative code, and "learned the design, wrote our own implementation" is not a derivative work.
+We credit it and state its licence anyway — out of respect, and so readers can judge for themselves.
+
+> If you ever want to **copy its source** into this project, the whole project would have to move to
+> GPL-2.0 — do not mix in its code without that decision.
+
+### Others
+
+- [cloudflared](https://github.com/cloudflare/cloudflared) (Apache-2.0) — the public tunnel.
+- [mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile) (MIT) — dsh-pocket's mobile
+  adaptation was ported from it; we do not use it directly, but the mobile design originates there.
+- The family card styling and brand icon come from sibling plugins such as
+  `dingminhua/dsh-connect-workbuddy`.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list and licence requirements.
 
 ## License
 
