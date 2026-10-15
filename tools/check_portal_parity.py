@@ -86,6 +86,47 @@ def main():
     check("地址行样式 addrRow 在（长 URL 可换行、按钮不被挤走）",
           "addrRow:" in client and 'flexWrap: "wrap"' in client)
 
+    # ---- 未启动状态：不能乱（用户：「初始未开启的状态很乱，感觉没有逻辑」）----
+    #
+    # 截图里的三处硬伤：
+    #   1. 「启动于 01:39:42」出现在"已停止"旁边 —— 自相矛盾
+    #   2. 一个**点不动**的「开启公网访问」按钮顶在最上面，看着像主操作
+    #   3. 全局看不到局域网地址（整块在 if (running) 里），只能看到一个红字报错
+    print("\n[未启动状态：逻辑要通]")
+    check("「启动于」只在运行中显示（停着的时候显示它是自相矛盾）",
+          "running && status && status.startedAt" in client
+          and "status && status.startedAt" in client,
+          "（原来是无条件显示）")
+    check("未启动有专门的引导块（说明 + 将用地址 + 启动按钮）",
+          '"门户未启动"' in client and "启动后会使用这些地址" in client)
+    check("未启动时公网区块**不放按钮**（那个按钮点不动）",
+          ": running\n        ? h(\"button\"" in client
+          or "running\n        ? h(" in client,
+          "（原来公网按钮 disabled=!running，等于死按钮）")
+    check("未启动时明确说明「启动后可开公网」",
+          "门户未启动。启动后可以再开一个公网地址" in client)
+    check("未启动时有「还没探测过网卡地址」的兜底文案（首次使用）",
+          "还没探测过网卡地址" in client)
+    check("启动按钮在未启动引导块里（不再散落在页面下方）",
+          "启动（只内网）" in client and "启动并开公网" in client)
+    check("运行中**能停**门户（原来只有 doStop 死代码，启停不对称）",
+          'onClick: doStop' in client and '"停止门户"' in client,
+          "（以前面板只能开不能关）")
+    check("未启动时 problem 是普通说明（不是红字报警）",
+          "running ? styles.warn : styles.muted" in client
+          and "key: \"prob\"" in client,
+          "（用户自己停的也算正常状态）")
+    check("未启动时不显示「拿到口令的人可以…」警示（还轮不到）",
+          client.count("拿到口令的人可以启停你开放的服务") == 1
+          and "if (running) {\n    children.push(h(\"div\", { key: \"warn\"" in client)
+    check("停止失败要报出来（宿主回 ok:false + stderr 时不能静默）",
+          'if (r && r.ok === false)' in client
+          and "没能停止门户" in client,
+          "（否则点了停止没反应，用户以为点错了）")
+    check("停止后一律重新拉状态（不信返回里的状态快照）",
+          "await load();" in client
+          and "// 一律重新拉状态" in client)
+
     # ---- 标题：本插件的身份文案，**不能照抄参考对象** ----
     # 踩过的坑：对齐 dsh-pocket 那轮把标题也一起抄了（「对外服务门户」→「手机访问」），
     # 副标题也换成了它的「实时同步」。用户一眼看出不对。

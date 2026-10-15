@@ -43,7 +43,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 ROOT = os.path.dirname(HERE)
-RUNS_DIR = os.path.join(ROOT, "runs")
+# 状态目录可以用 PORTAL_RUNS_DIR 顶掉。给测试用的：检验脚本会起临时门户，
+# 不隔离的话它们会把用户真实的 portal_state.json / portal_registry.json
+# （里面有局域网口令、以及用户在控制台添加的服务）覆盖掉。
+RUNS_DIR = os.environ.get("PORTAL_RUNS_DIR") or os.path.join(ROOT, "runs")
 LOG_DIR = os.path.join(RUNS_DIR, "portal_logs")
 STATE_FILE = os.path.join(RUNS_DIR, "portal_state.json")
 REGISTRY_FILE = os.path.join(RUNS_DIR, "portal_registry.json")
@@ -150,6 +153,17 @@ def load_state():
         return None
 
 
+def _raw_prefs():
+    """状态文件里现存的偏好字段（原样读，不经过任何加工）。
+
+    用途见 save_state：写入前拿它补空，避免"这一轮拿不到的字段"把
+    "上一轮已经知道的"覆盖成空 —— 那会让设置页在启动的一小段窗口里
+    显示成"运行中、但没有内网地址"，看起来就是二维码和地址一起消失。
+    """
+    raw = load_state() or {}
+    return {key: raw[key] for key in KEEP_ON_STOP if key in raw}
+
+
 def save_state(state):
     """原子写状态文件。
 
@@ -162,6 +176,16 @@ def save_state(state):
     仍然保留重试：杀毒软件/索引器会在文件刚创建时短暂占用，重试即可穿过。
     """
     os.makedirs(RUNS_DIR, exist_ok=True)
+    # 拿不到值的偏好字段，用上一轮已经知道的顶上。
+    # 实测场景：门户刚起来那几秒，网卡探测还没跑完，这一轮写进去的
+    # lan_candidates 是空的 —— 设置页于是"运行中但没有内网地址"（二维码和
+    # 地址整块不见）。偏好本来就不会因为一次探测失败而作废，补上更诚实。
+    kept = _raw_prefs()
+    merged = dict(state)
+    for key, value in kept.items():
+        if merged.get(key) in (None, "", [], {}):
+            merged[key] = value
+    state = merged
     # 唯一临时名：pid + 线程 id（同一进程内也可能并发调用）
     unique = "%s.%d.%d.tmp" % (STATE_FILE, os.getpid(),
                                threading.get_ident())
@@ -179,9 +203,21 @@ def save_state(state):
             except OSError:
                 pass
             time.sleep(0.1 * (attempt + 1))
-    print("提示：状态文件写不进去（%s）：%s" % (STATE_FILE, last_error),
-          file=sys.stderr)
-    return False
+    # 原子路径失败就退一步**原地覆盖**。实测：DSH 宿主派生出来的子进程
+    # 在 runs/ 下**新建**文件会被拒（Errno 13），但改写已有文件可以。
+    # 原地写没有原子性（理论上可能留半截），但比"一个字都没写进去、
+    # 局域网口令和停止标记全丢"要好；降级会明确报到 stderr，不静默。
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2)
+        print("提示：状态文件降级为原地写入（原子替换被拒：%s）" % (last_error,),
+              file=sys.stderr)
+        return True
+    except OSError as exc:
+        print("提示：状态文件写不进去（%s）：%s" % (STATE_FILE, last_error),
+              file=sys.stderr)
+        print("提示：原地写入也失败：%s" % (exc,), file=sys.stderr)
+        return False
 
 
 def clear_state():
@@ -536,8 +572,34 @@ def run_portal(args):
         except Exception:
             return {}
 
+    # 关闭自己的函数在下面才定义（要等 server 就绪），用 holder 传进来：
+    # 直接在 api_handler 里引用 `shutdown` 会在极早期请求上 NameError。
+    shutdown_holder = {"fn": None}
+
     def api_handler(handler, method, route, body):
         """控制台 API。所有写操作都落注册表，立即生效。"""
+        if method == "POST" and route == "/shutdown":
+            # 让门户**自己退**。插件（DSH 宿主）从外面杀 pid 在某些环境里
+            # 根本看不见这个进程 —— 实测宿主派生出来的子进程与门户不在同一个
+            # 作业/沙箱内，taskkill 直接回"找不到进程"(128)，门户却活得好好的，
+            # 于是"停止"报成功但什么都没停。请求它自己退出才是可靠路径。
+            #
+            # 安全：只接受**本机**发起的请求。门户监听 0.0.0.0，局域网和公网
+            # 都连得到它 —— 不能让人从手机上把门户关掉。
+            peer = handler.client_address[0] if handler.client_address else ""
+            if peer not in ("127.0.0.1", "::1", "localhost"):
+                handler._send_json(403, {"ok": False,
+                                         "error": "只允许本机停止门户（当前来自 %s）"
+                                                  % peer})
+                return True
+            fn = shutdown_holder["fn"]
+            if fn is None:
+                handler._send_json(503, {"ok": False, "error": "门户还没就绪"})
+                return True
+            handler._send_json(200, {"ok": True, "stopping": True})
+            # 先把响应发出去，再关服务（否则客户端拿到的是"连接被重置"）
+            threading.Timer(0.3, fn).start()
+            return True
         if method == "GET" and route == "/services":
             handler._send_json(200, {"ok": True, "services": console_state()["services"]})
             return True
@@ -862,7 +924,13 @@ def run_portal(args):
     print("=" * 66)
     sys.stdout.flush()
 
+    stopped = {"flag": False}
+
     def shutdown(*_):
+        # 可能被信号处理器（主线程）或 /_api/shutdown 的 Timer 线程调用，防重入
+        if stopped["flag"]:
+            return
+        stopped["flag"] = True
         print("\n正在停止…")
         for entry in registry.list():
             supervisor.stop(entry["key"])
@@ -872,20 +940,32 @@ def run_portal(args):
                 proc.terminate()
             except Exception:
                 pass
-        clear_state()
+        # 用 mark_stopped() 而不是 clear_state()：状态文件里存着**要留存的偏好**
+        # （局域网口令、自定义标记、网卡候选、手动选的地址）。删掉它，
+        # 「局域网口令重启后不变」就失效了，用户手机里存过的口令也白存。
+        mark_stopped()
         server.shutdown()
         print("已停止。")
-        sys.exit(0)
+        sys.stdout.flush()
+        # 从信号处理器（主线程）里 sys.exit 会把进程带出去；但从 HTTP 的
+        # Timer 线程里 exit 只结束那个线程 —— 实测结果是"端口松了、进程还在"。
+        # 所以主线程那条路交给下面的 while 条件退出。
+        if threading.current_thread() is threading.main_thread():
+            sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
+    # 让 POST /_api/shutdown 也能走到同一个关闭流程（见 api_handler 里的说明）
+    shutdown_holder["fn"] = shutdown
     try:
         signal.signal(signal.SIGTERM, shutdown)
     except (AttributeError, ValueError):
         pass
 
     try:
-        while True:
-            time.sleep(1)
+        # server.shutdown() 之后 serve_forever 返回，但主线程还停在这个循环里，
+        # 所以循环条件要看 stopped 标记 —— 否则"端口松了、进程还在"。
+        while not stopped["flag"]:
+            time.sleep(0.5)
     except KeyboardInterrupt:
         shutdown()
 
@@ -967,39 +1047,140 @@ def _pids_listening_on(port):
     return pids
 
 
-def stop_all(port=DEFAULT_PORTAL_PORT):
+# 停止时要**留下**的东西：它们是"偏好"，不是"运行痕迹"。
+# 踩过的坑：stop_all() 原来结尾 clear_state() 把整个状态文件删了，于是
+#   · 局域网口令（重启后不变，用户手机里存过的）下次启动变成新随机口令；
+#   · 自定义口令标记 lan_pin_custom 一起丢，用户以为"我设过固定口令"；
+#   · 网卡候选没了，设置页在未启动时连"将要使用哪个地址"都显示不出来。
+KEEP_ON_STOP = (
+    "lan_password", "lan_pin_custom", "lan_candidates", "lan_candidate_detail",
+    "lan_ip_override", "lan_auth_enabled", "lan_enabled", "password_mode",
+)
+
+
+def _looks_like_our_portal(port, timeout=2.5):
+    """这个端口上监听的是**我们的门户**吗？
+
+    光看"端口上有人"就杀是危险的：端口可能配到了别的程序、或者被别的程序占了。
+    我们的门户对 `/_auth/health` 一定有响应，且响应体是它自己的 JSON
+    （实测：门户返回 200 + {"ok": true}；普通 http.server 返回 404）。
+    判不出来就**不杀** —— 宁可留给用户手动处理，也不要顺手杀掉不相干的进程。
+    """
+    import urllib.error
+    import urllib.request
+    url = "http://127.0.0.1:%d%s" % (port, HEALTH_PATH)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as res:
+            body = res.read(4096).decode("utf-8", "replace")
+            return res.status == 200 and '"ok"' in body.replace(" ", "")
+    except urllib.error.HTTPError as err:
+        # 401/403 也说明"这里有个要求口令的东西"，很可能是我们的门户
+        return err.code in (401, 403)
+    except Exception:
+        return False
+
+
+def mark_stopped():
+    """把状态文件从"正在运行"改成"已停止"，但保留上面那些偏好。"""
+    state = load_state() or {}
+    kept = {key: state[key] for key in KEEP_ON_STOP if key in state}
+    kept["stopped_clean"] = True
+    kept["stopped_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    return save_state(kept)
+
+
+def _kill_pid(pid):
+    """尽力杀，返回 (状态, 原因)；状态是 "killed" / "gone" / "failed"。
+
+    为什么要三种而不是布尔：把"进程早就退出了"和"我杀不掉它"混成一种，
+    就会出现两种错误答案 —— 状态文件里是个旧 pid 时谎报"没杀掉"，
+    或者权限不足时谎报"已停止"。taskkill 用退出码 128 表示找不到进程。
+    """
+    if os.name != "nt":
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return "killed", "SIGTERM"
+        except ProcessLookupError:
+            return "gone", "进程不存在"
+        except Exception as exc:  # noqa: BLE001 - 要如实上报
+            return "failed", repr(exc)
+    # 优先绝对路径调 taskkill：宿主派生出来的子进程 PATH 可能不含 System32，
+    # 裸名 "taskkill" 会 FileNotFoundError，表现成"进程不存在"的假象。
+    taskkill = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                            "System32", "taskkill.exe")
+    argv0 = taskkill if os.path.exists(taskkill) else "taskkill"
+    try:
+        done = subprocess.run([argv0, "/PID", str(pid), "/T", "/F"],
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        return "failed", "调用 taskkill 失败：%r" % (exc,)
+    if done.returncode == 0:
+        return "killed", "taskkill"
+    text = ((done.stderr or "") + (done.stdout or "")).strip().replace("\r", " ")
+    if done.returncode == 128 or "not found" in text.lower() or "找不到" in text:
+        return "gone", text[:200]
+    return "failed", "taskkill 退出码 %d：%s" % (done.returncode, text[:200])
+
+
+def stop_all(port=None):
+    """停止本仓库记录的门户进程。返回 0=停好了（或本来就没在跑），1=没停掉。
+
+    三处都是踩出来的规则：
+
+    ① 端口兜底**只在明确指定时**才做。以前默认扫 DEFAULT_PORTAL_PORT(8899)，
+       于是检验脚本里一句裸的 `portal_run.py --stop` 把用户**正在运行**的门户
+       干掉了 —— 先按状态文件里的 pid 杀（pid 被别的测试换成自己的），
+       端口兜底又打到了用户那个。
+
+    ② 按端口杀之前**先确认这端口上是我们的门户**（`_looks_like_our_portal`）。
+       只认"端口上有人"就杀，会误杀端口被别的程序占用的场景。
+
+    ③ 停不掉就 return 1（宿主据此把失败透给设置页），不谎报"已停止"。
+    """
     state = load_state()
     killed = []
+    failed = []
     if state:
         pid = state.get("portal_pid")
         if pid:
-            try:
-                if os.name == "nt":
-                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                                   capture_output=True)
-                else:
-                    os.kill(pid, signal.SIGTERM)
+            how, why = _kill_pid(pid)
+            if how == "killed":
                 killed.append(pid)
-            except Exception as exc:
-                print("停止 %s 失败：%r" % (pid, exc), file=sys.stderr)
-    # 兜底：按端口扫孤儿进程（状态文件丢了/换了端口的情况）
-    for pid in _pids_listening_on(port):
-        if pid in killed:
-            continue
-        try:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                               capture_output=True)
+            elif how == "failed":
+                failed.append((pid, why))
+            # how == "gone"：状态文件是旧的，进程早没了 —— 什么都不用做
+    # 扫端口用的端口：显式 --port 优先；否则用状态文件里记的（那也是本仓库的门户）
+    scan_port = port
+    if scan_port is None and state:
+        scan_port = state.get("portal_port")
+    if scan_port:
+        scan_port = int(scan_port)
+        if port_listening(scan_port):
+            if _looks_like_our_portal(scan_port):
+                for pid in _pids_listening_on(scan_port):
+                    if pid in killed:
+                        continue
+                    how, why = _kill_pid(pid)
+                    if how == "killed":
+                        killed.append(pid)
+                    elif how == "failed":
+                        failed.append((pid, why))
             else:
-                os.kill(pid, signal.SIGTERM)
-            killed.append(pid)
-        except Exception:
-            pass
+                # 这端口上有个东西，但不是我们的门户：**不碰**
+                print("端口 %s 上的东西不像是本门户（%s 不认识），没有动它"
+                      % (scan_port, HEALTH_PATH), file=sys.stderr)
+    for pid, why in failed:
+        print("进程 %s 没杀掉：%s" % (pid, why), file=sys.stderr)
     if killed:
-        print("已停止门户进程 %s" % ", ".join(str(p) for p in killed))
+        print("已停止门户进程 %s" % ", ".join(str(pid) for pid in killed))
     else:
         print("门户未在运行。")
-    clear_state()
+    if failed:
+        # 有活着的目标却没杀掉：不能让调用方以为停好了
+        return 1
+    # 注意：这里**不** clear_state()，见 KEEP_ON_STOP 的说明
+    mark_stopped()
     return 0
 
 
@@ -1028,11 +1209,16 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    args = build_parser().parse_args(raw)
     if args.status:
         return print_status()
     if args.stop:
-        return stop_all(args.port)
+        # 只有**显式**写了 --port 才允许按端口扫孤儿进程。`--port` 在参数表里
+        # 有默认值 8899，直接传 args.port 等于"永远都在扫 8899"，就退回了
+        # 那个会误杀用户门户的旧行为。
+        explicit = any(a == "--port" or a.startswith("--port=") for a in raw)
+        return stop_all(args.port if explicit else None)
     return run_portal(args)
 
 

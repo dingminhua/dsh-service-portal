@@ -206,7 +206,10 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
-| `tools/check_portal_parity.py` | 41 | 设置页三处对标：缺右上角求 Star 区块、局域网口令与公网共用、**「自动选地址」只是显示不生效** |
+| `tools/check_portal_parity.py` | 66 | 设置页三处对标：缺右上角求 Star 区块、局域网口令与公网共用、**「自动选地址」只是显示不生效**；未启动状态逻辑（「启动于」出现在已停止旁、点不动的死按钮、看不到将用地址） |
+| `tools/check_portal_stop_scope.py` | 13 | **`--stop` 顺手杀掉同端口上别人的进程**（用户正在跑的门户被检验脚本干掉）；停止后口令/候选被整份删掉 |
+| `tools/check_portal_shutdown.py` | 6 | 门户自退接口：局域网/公网来源必须被拒（不能从手机把门户关掉）、GET 不生效、**端口松了进程没退** |
+| `tools/check_plugin_stop.py` | 6 | 设置页「停止门户」真能停：**宿主派生进程杀不掉门户却报成功**（沙箱/作业隔离），改走"请门户自己退" |
 | `tools/check_portal_lan_pin.py` | 23 | 局域网口令刷新/自定义；**公网拿局域网口令能进来**（安全边界）、候选列表没落盘 |
 | `tools/check_portal_form.py` | 8 | **控制台表单提交被当成坏 JSON**（页面上点「添加服务」永远失败）、表单没有 key 字段导致必然失败 |
 | `tools/check_portal_tunnel.py` | 11 | **门户已在跑时「开启公网访问」什么都不做**（幂等检查把建隧道也跳过了）、「关闭公网」把整个门户停掉 |
@@ -232,13 +235,18 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `test/test_lan_switch.py` | 6 | 局域网访问总开关：关掉后内网要求口令、本机不受影响、重开恢复 |
 | `test/test_public_link.py` | 12 | **真实公网链路**：域名可达、公网首页是登录页、未登录拿不到 API 数据、内网免密、畸形 Host fail-closed |
 | `test/test_settings_data.py` | 10 | 设置页数据链：状态字段、二维码生成、二维码只给本门户地址（防图床） |
-| `test/test_host_buttons.py` | 8 | **走插件宿主 API**（设置页按钮真正调用的路径）：开启→状态→重复开启→停止 |
+| `test/test_host_buttons.py` | 10 | **走插件宿主 API**（设置页按钮真正调用的路径）：开启→状态→重复开启→停止；停止走的是"门户自退"；**收尾恢复用户原本在跑的门户** |
 
 **依赖缺失必须「跳过并返回 2」，不得静默通过** —— 这是本仓库的硬纪律。
 
+**检验不许动用户正在跑的门户**：脚本一律用临时端口 + 临时 `PORTAL_RUNS_DIR`，
+不碰用户真实的 `runs/`（那里面存着局域网口令和用户在控制台注册的服务）。
+这条是踩出来的：一句裸的 `portal_run.py --stop` 曾把用户的门户干掉，
+用户看到的是「二维码和访问地址一起消失」。
+
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 36 项宿主端控制检验
+& $node --test test/host.test.mjs      # 46 项宿主端控制检验
 & $node --test test/client.test.mjs    # 17 项客户端分发契约检验
 
 # Python 控制检验
@@ -249,6 +257,9 @@ python -X utf8 tools\check_portal_registry.py
 python -X utf8 tools\check_portal_console.py
 python -X utf8 tools\check_portal_proxy.py
 python -X utf8 tools\check_portal_auth.py
+python -X utf8 tools\check_portal_stop_scope.py
+python -X utf8 tools\check_portal_shutdown.py
+python -X utf8 tools\check_plugin_stop.py
 python -X utf8 tools\check_tunnel_auth.py
 python -X utf8 tools\check_tunnel_domain.py
 python -X utf8 tools\check_plugin.py

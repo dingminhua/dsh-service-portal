@@ -10,14 +10,42 @@
   3. 端口被占时能**自动往后试**（用户不必为「上个门户没停干净」手动换端口）。
 """
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+
+
+def port_free(port):
+    """这个端口现在能不能独占绑上（SO_EXCLUSIVEADDRUSE，和门户同口径）。"""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        probe.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def pick_base_pair():
+    """挑一个 base，使 base 和 base+1 都空着。
+
+    为什么要动态挑：这个检验原来是写死 9060 的，然后断言"门户会落到 9061"。
+    实测在别的程序（或上一次检验的残留）占着 9061 的机器上，门户会落到 9062，
+    断言就失败 —— 那是**检验依赖机器当前状态**，不是产品有问题。
+    """
+    for base in range(20000, 30000, 2):
+        if port_free(base) and port_free(base + 1):
+            return base
+    return None
 
 
 def listening_addrs(port):
@@ -90,13 +118,15 @@ def main():
 
     # ---- 2. 真实进程：手机可达 + 端口自适应 ----
     print("\n[真实进程]")
-    runs = os.path.join(ROOT, "runs")
-    state = os.path.join(runs, "portal_state.json")
-    backup = state + ".bind-check"
-    if os.path.exists(state):
-        os.replace(state, backup)
+    # 状态目录隔离到临时目录：不碰用户真实的 runs/（里面存着局域网口令和
+    # 用户在控制台注册的服务）。原来这里借用了真实 runs/ 再备份还原，
+    # 一旦中途异常，用户的状态文件就悬了。
+    runs_tmp = tempfile.mkdtemp(prefix="portal-bind-runs-")
 
-    base = 9060
+    base = pick_base_pair()
+    if base is None:
+        print("找不到两个连续空闲端口，跳过真实进程部分")
+        return 1
     blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     blocker.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
     blocker.bind(("0.0.0.0", base))
@@ -105,7 +135,8 @@ def main():
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8", os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(base), "--password", "bind-check-password-1", "--lan-only"],
-        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=dict(os.environ, PORTAL_RUNS_DIR=runs_tmp))
     try:
         check("原定端口被占时自动换端口并起来",
               wait_ready(base + 1), "端口 %d 是否就绪" % (base + 1))
@@ -154,11 +185,7 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
         blocker.close()
-        for path in (state, state + ".tmp"):
-            if os.path.exists(path):
-                os.remove(path)
-        if os.path.exists(backup):
-            os.replace(backup, state)
+        shutil.rmtree(runs_tmp, ignore_errors=True)
 
     passed = sum(1 for ok in results if ok)
     print("\n绑定与端口自适应控制检验：%d/%d" % (passed, len(results)))

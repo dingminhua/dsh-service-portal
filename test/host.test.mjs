@@ -19,6 +19,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 
 import { _internals, Config, name, apply } from "../lib/index.js";
 
@@ -502,4 +503,209 @@ test("write_password：写失败不阻断启动（它只是给人看的副本）
     src.indexOf("def write_lan_password") + 200);
   assert.ok(lan.includes("LAN_PASSWORD_FILE"),
     "write_lan_password 写 LAN_PASSWORD_FILE（不能和公网写同一个文件）");
+});
+
+// ---------------------------------------------------------------------------
+// 未启动状态：地址必须是「将要使用的」，不能回上次运行的残留
+// ---------------------------------------------------------------------------
+
+/** 造一个带 portal_state.json 的假仓库（门户形态）。 */
+function portalRepo(state) {
+  const root = mkdtempSync(join(tmpdir(), "service-portal-state-"));
+  mkdirSync(join(root, "runs"), { recursive: true });
+  if (state) {
+    writeFileSync(join(root, "runs", "portal_state.json"),
+      JSON.stringify(state), "utf8");
+  }
+  return root;
+}
+
+/**
+ * 拿一个「确定没人监听」的端口。
+ *
+ * 必须这样拿，不能写死 8899 —— 用户自己的门户可能正跑在那个端口上，
+ * 写死会让「未启动」用例在别人机器上偶发失败（本检验第一版就踩了：
+ * 本机 8899 正被用户的真实门户占着，listening 意外为真）。
+ */
+async function closedPort() {
+  const { server, port } = await listenOnFreePort();
+  await new Promise((done) => server.close(done));
+  return port;
+}
+
+test("readPortalStatus：没有状态文件时返回 null（从没启动过）", async () => {
+  const root = portalRepo(null);
+  try {
+    assert.equal(await _internals.readPortalStatus(root, "D:\\x", 8899), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readPortalStatus：未启动时地址用**当前配置端口**，不是上次残留的", async () => {
+  // 实测踩过：状态文件残留 8991（上次运行），配置已经改成别的端口，
+  // 界面就会显示一个根本不存在的地址 —— 用户点它打不开，且无从判断为什么。
+  const configured = await closedPort();
+  const root = portalRepo({
+    portal_port: 8991,
+    lan_urls: ["http://192.168.71.10:8991", "http://10.198.75.60:8991"],
+    lan_candidates: ["192.168.71.10", "10.198.75.60"],
+    lan_ip_override: "",
+    password: "oldpw",
+  });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", configured);
+    assert.equal(s.running, false, "端口没监听就该是未运行");
+    assert.equal(s.portalPort, configured,
+      "未启动时要回配置端口，不是状态文件里的 8991");
+    assert.deepEqual(s.lanUrls, [
+      `http://192.168.71.10:${configured}`,
+      `http://10.198.75.60:${configured}`,
+    ], "地址要按当前端口重算，不能直接沿用上次的 8991");
+    assert.equal(s.lanPlanned, true, "未启动时地址是「将要使用」，要标出来");
+    assert.ok(!String(s.problem).includes("异常退出"),
+      "未启动是正常状态，problem 不该是报警口气");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readPortalStatus：未启动时手动选定的地址排在第一个", async () => {
+  // 手动选定的地址是用户明确指定要用的（认证层也认它），未启动预览必须也认，
+  // 否则用户看到的地址和启动后真正拿到的不一致。
+  const configured = await closedPort();
+  const root = portalRepo({
+    portal_port: configured,
+    lan_urls: [],
+    lan_candidates: ["192.168.71.10", "10.198.75.60"],
+    lan_ip_override: "26.31.152.7",
+  });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", configured);
+    assert.equal(s.running, false);
+    assert.equal(s.lanUrls[0], `http://26.31.152.7:${configured}`,
+      "手动选的地址必须排第一");
+    assert.equal(s.lanUrls.length, 3, "其余候选跟在后面，不能丢");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readPortalStatus：真在监听时用状态文件里的地址（不做重算）", async () => {
+  // 反例控制：运行中必须相信门户报出来的地址 —— 那时端口可能和配置不同
+  // （门户支持 --port 覆盖），重算会得到一个错的地址。
+  const { server, port } = await listenOnFreePort();
+  const root = portalRepo({
+    portal_port: port,
+    lan_urls: [`http://192.168.71.10:${port}`],
+    lan_candidates: ["192.168.71.10", "10.198.75.60"],
+    lan_ip_override: "",
+  });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", 12345);
+    assert.equal(s.running, true);
+    assert.equal(s.portalPort, port, "运行中要用真实监听端口");
+    assert.deepEqual(s.lanUrls, [`http://192.168.71.10:${port}`],
+      "运行中要用门户报的地址，不能拿配置端口重算");
+    assert.equal(s.lanPlanned, false);
+    assert.equal(s.problem, null, "正常运行时没有 problem");
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readPortalStatus：用户主动停止过就不再报 problem（不是异常退出）", async () => {
+  // portal_run.py --stop 会写下 stopped_clean。那种情况下状态行已经写着
+  // 「已停止」，再挂一句红字（"端口没在监听…"）就是噪音 —— 用户截图里的
+  // 红字有一部分就是它。
+  const configured = await closedPort();
+  const root = portalRepo({
+    stopped_clean: true,
+    stopped_at: "2026-10-16 02:10:35",
+    lan_password: "57457404",
+    lan_candidates: ["192.168.71.10"],
+  });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", configured);
+    assert.equal(s.running, false);
+    assert.equal(s.stoppedClean, true, "要能把「干净停止」透给设置页");
+    assert.equal(s.problem, null, "主动停止不是 problem");
+    assert.deepEqual(s.lanUrls, [`http://192.168.71.10:${configured}`],
+      "停止后仍然要知道下次会用哪个地址");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readPortalStatus：反例 —— 没写 stopped_clean 时要报出来（崩溃/被杀）", async () => {
+  const configured = await closedPort();
+  const root = portalRepo({
+    lan_password: "57457404",
+    lan_candidates: ["192.168.71.10"],
+  });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", configured);
+    assert.equal(s.stoppedClean, false);
+    assert.ok(String(s.problem || "").includes("没在监听"),
+      "不是主动停止就要给出「没在监听」这个事实，problem=%r" % s.problem);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 停止门户：请门户「自己退」（沙箱里从外面杀 pid 根本看不见那个进程）
+// ---------------------------------------------------------------------------
+
+/** 起一个假的"门户"：只处理 POST /_api/shutdown，按 status 回。 */
+function fakePortal({ status = 200, hang = false } = {}) {
+  return new Promise((resolvePort) => {
+    const server = createHttpServer((req, res) => {
+      if (hang) return;                       // 故意不回，用来测超时兜底
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: status === 200 }));
+    });
+    server.listen(0, "127.0.0.1", () => {
+      resolvePort({ server, port: server.address().port });
+    });
+  });
+}
+
+test("askPortalShutdown：门户回 200 → 认成功", async () => {
+  const { server, port } = await fakePortal({ status: 200 });
+  try {
+    assert.equal(await _internals.askPortalShutdown(port, 2000), true);
+  } finally {
+    server.close();
+  }
+});
+
+test("askPortalShutdown：门户回 403 → 认失败（不能当停好了）", async () => {
+  // 反例控制：只有 2xx 才算"请它退成功了"。把 403 也当成功的话，
+  // 设置页会显示"已停止"，而门户其实还在跑。
+  const { server, port } = await fakePortal({ status: 403 });
+  try {
+    assert.equal(await _internals.askPortalShutdown(port, 2000), false);
+  } finally {
+    server.close();
+  }
+});
+
+test("askPortalShutdown：端口上没人 → 快速失败，不拖住设置页", async () => {
+  const port = await closedPort();
+  const t0 = Date.now();
+  assert.equal(await _internals.askPortalShutdown(port, 1500), false);
+  assert.ok(Date.now() - t0 < 4000, "失败不能拖太久，否则点停止像卡死");
+});
+
+test("askPortalShutdown：门户不回话（卡住）→ 超时失败，仍给兜底机会", async () => {
+  const { server, port } = await fakePortal({ hang: true });
+  try {
+    const t0 = Date.now();
+    assert.equal(await _internals.askPortalShutdown(port, 800), false);
+    assert.ok(Date.now() - t0 < 5000, "超时后必须返回，不能永远挂着");
+  } finally {
+    server.close();
+  }
 });

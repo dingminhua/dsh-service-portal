@@ -6,12 +6,23 @@
 所以漏掉了「插件等常驻进程退出 240 秒」那个 bug。
 """
 import json
+import os
 import time
 import urllib.error
 import urllib.request
 
 API = "http://127.0.0.1:19387/service-portal/api"
 PORT = 8899
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _expected_stamp():
+    """当前这份代码的指纹 = package.json 的版本号（宿主用同一个值）。"""
+    try:
+        with open(os.path.join(ROOT, "package.json"), "r", encoding="utf-8") as fh:
+            return json.load(fh).get("version")
+    except Exception:
+        return None
 
 
 def call(path, method="GET", body=None, timeout=120):
@@ -47,10 +58,41 @@ def check(label, cond, detail=""):
 def main():
     ok = True
 
-    # --- 0. 先确保是停止状态 ---
+    # --- 0. 先确认这个测试有意义：宿主上跑的必须是**当前这份**代码 ---
+    #
+    # 这个测试打的是活着的 DSH 宿主（设置页按钮真正走的那条路）。宿主进程只在
+    # DSH **启动时**把 lib/index.js 读进内存，之后不会热加载（实测：临时加一个
+    # 字段，/status 里一直看不到）。改了代码没重启 DSH，测出来的"失败"是
+    # **测试自己过期**，不是插件坏了 —— 报成 FAIL 会把排查方向带偏。
+    # 按本仓库纪律：前置条件不满足就**明确跳过并返回 2**，不静默通过也不假报失败。
+    import json as _json
+    expected = _expected_stamp()
+    try:
+        probe_status, probe = call("/status", timeout=20)
+    except Exception as exc:
+        print("宿主 API 不可达（%r）：跳过" % (exc,))
+        return 2
+    if not isinstance(probe, dict) or probe_status != 200:
+        print("宿主 API 异常（HTTP %r）：跳过" % (probe_status,))
+        return 2
+    if probe.get("codeStamp") != expected:
+        print("宿主跑的**不是**当前代码：期望 codeStamp=%r，实际 %r"
+              % (expected, probe.get("codeStamp")))
+        print("（宿主只在 DSH 启动时加载 lib/index.js，改完要重启 DSH。）")
+        print("按纪律跳过（返回 2），不算通过。")
+        return 2
+
+    # --- 起点：不强求是停止状态 ---
+    # 这个测试打的是宿主 API，而宿主上通常正跑着用户自己的门户。原来一上来就
+    # 断言「门户已停止（干净起点）」，用户门户正在跑时必然失败 —— 而且它把用户的
+    # 门户停掉之后并不恢复。现在：先记下现场，结束时恢复回原样。
+    was_alive = portal_alive()
+
+    # 停一次，顺带验证「停止」真的有效（这次修的正是它）
     call("/stop", "POST", {}, timeout=90)
     time.sleep(2)
-    check("门户已停止（干净起点）", not portal_alive())
+    ok &= check("点「停止」后门户真的停了（端口释放）", not portal_alive(),
+                "进门前门户在运行=%r" % was_alive)
 
     # --- 1. 点「开启门户（只内网）」 ---
     t0 = time.time()
@@ -85,6 +127,19 @@ def main():
     time.sleep(3)
     ok &= check("停止返回 ok=true", stopped.get("ok") is True)
     ok &= check("停止后端口真的释放", not portal_alive())
+    # 走的是"请门户自己退"这条可靠路径（沙箱里从外面杀 pid 看不见进程）。
+    # 旧版宿主没这个字段 —— 那时不要误判成失败。
+    if "stoppedBy" in stopped:
+        ok &= check("停止走的是「门户自退」（不是靠 taskkill 猜）",
+                    stopped.get("stoppedBy") == "self",
+                    "stoppedBy=%r" % stopped.get("stoppedBy"))
+
+    # --- 5. 收尾：把现场恢复回原样（进门前在跑的，出去时也要在跑） ---
+    if was_alive:
+        status, back = call("/start", "POST", {"lanOnly": True}, timeout=180)
+        time.sleep(2)
+        ok &= check("收尾：把用户原来在跑的门户恢复了", portal_alive(),
+                    "ok=%r" % back.get("ok"))
 
     print("\n设置页按钮端到端：%s" % ("全部通过" if ok else "有失败"))
     return 0 if ok else 1
