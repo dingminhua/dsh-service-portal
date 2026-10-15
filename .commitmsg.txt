@@ -1,0 +1,24 @@
+fix(portal): 修复 fail-closed 漏洞（畸形 Host 免密）+ 控制台双斜杠链接
+
+验收（新写端到端脚本，真起门户进程）发现两个真实缺陷：
+
+1. fail-closed 漏洞：classify_host 原实现「不含点的 Host 就是局域网」，
+   于是 Host: 'garbage value'、'<script>' 这类畸形值全部判成 lan 享受内网免密
+   —— 等于给出「随便编个 Host 就能绕过口令」的路径。
+   修正：单标签名必须是合法主机名（RFC 1123：字母/数字/连字符，不以下划线
+   开头结尾，不超过 63 字符），否则 fail-closed 到 public。
+   同时保留合法内网名（myhost / nas-2 / 63 字符名）仍判 lan —— 防修过头。
+
+2. 控制台访问链接双斜杠：生成 href="/acc//"（mount 已含前导斜杠，
+   模板又补了一个）。某些代理或浏览器会规范化重定向。
+
+新增：
+- tools/check_portal_integration.py：把这两个缺陷固化成回归检查，含反向控制
+  （合法单标签名仍判 lan、分类仍有三种结果，证明断言有区分力）
+- test/acceptance_portal.py：端到端验收脚本（真起 portal_run.py 子进程，
+  29 项覆盖：页面增删改开关服务、路由改动生效、内网免密与外网口令、
+  二维码与手机端与限速与健康检查真实性、三分类 fail-closed、依赖缺失返回 2）
+- README 双语控制检验表补全（英文版此前的表还是旧的）、CHANGELOG 0.4.0
+- 版本 0.4.0；package.json 描述改为门户控制台形态
+
+验证：8 项控制检验 + Node 24/17 + 端到端 29 项全通过。

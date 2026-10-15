@@ -144,10 +144,25 @@ python -X utf8 tools/start_public_gui.py --status / --stop
 
 | Check | Count | Bug it catches |
 | :--- | ---: | :--- |
-| `tools/check_portal_auth.py` | 35 | Unauthenticated access allowed, forged/tampered/expired sessions, password stored in cookie, Basic Auth dialog |
+| `tools/check_portal_integration.py` | — | A malformed Host counted as LAN (`garbage value` was password-free), double-slash console links |
+| `tools/check_portal_registry.py` | 88 | Duplicate/illegal mounts, key collisions, **changes not persisted** (lost on restart), crash on a corrupt file |
+| `tools/check_portal_console.py` | — | Disabled services still clickable, `<script>` in a service name (stored XSS), non-deterministic QR |
+| `tools/check_portal_proxy.py` | — | **A self-hosted domain judged as LAN**, auth not before forwarding, rate limit not working, forged `cf-connecting-ip` |
+| `tools/check_portal_auth.py` | 35 | Unauthenticated access allowed, forged/tampered/expired sessions, password stored in cookie |
 | `tools/check_tunnel_auth.py` | 35 | Auth bypass, prefix not stripped, wrong upstream, unknown prefix 200-fallback |
 | `tools/check_tunnel_domain.py` | 10 | Reusing the **previous** domain from append-only logs (530 publicly, fine locally) |
-| `tools/check_plugin.py` | 26 | Plugin exports contract, "running" reported while the service is dead |
+| `tools/check_plugin.py` | 41 | Plugin exports contract, "running" reported while the service is dead, bad password mode |
+
+```powershell
+python -X utf8 tools\check_portal_integration.py
+python -X utf8 tools\check_portal_registry.py
+python -X utf8 tools\check_portal_console.py
+python -X utf8 tools\check_portal_proxy.py
+python -X utf8 tools\check_portal_auth.py
+python -X utf8 tools\check_tunnel_auth.py
+python -X utf8 tools\check_tunnel_domain.py
+python -X utf8 tools\check_plugin.py
+```
 
 **A missing dependency must "skip and return 2", never silently pass** — that is the house rule.
 
@@ -174,6 +189,10 @@ python -X utf8 tools/start_public_gui.py --status / --stop
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
 & $node --test test/host.test.mjs      # 24 host-side control checks
 & $node --test test/client.test.mjs    # 17 client distribution contract checks
+
+# End-to-end acceptance: launches the real portal process and verifies
+# LAN-is-free / public-needs-password / console-manages-services / rate limit / health
+python -X utf8 test\acceptance_portal.py    # 29 checks
 ```
 
 ## Relationship with sibling plugins

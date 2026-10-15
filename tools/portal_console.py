@@ -592,8 +592,11 @@ def _service_card(svc, public_url):
         status = "未启用"
     # 未启用时访问链接**不得**可点：改用不可点 span，绝不产生 <a>
     if enabled:
-        visit = ('<a class="btn primary" href="%s/">访问</a>'
-                 % escape_html(mount_val + "/"))
+        # mount_val 已经带前导斜杠（注册表规范化为 /train），这里只补尾部的一个，
+        # 不能写 "href=\"%s/\"" 再传 mount_val + "/" —— 那会生成 /train// 双斜杠，
+        # 某些代理/浏览器会规范化成重定向，链接难看且行为不确定。
+        visit = ('<a class="btn primary" href="%s">访问</a>'
+                 % escape_html(mount_val.rstrip("/") + "/"))
     else:
         visit = '<span class="btn dim" aria-disabled="true" title="未启用不可访问">访问</span>'
     rows = []

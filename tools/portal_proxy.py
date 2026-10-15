@@ -91,6 +91,25 @@ def _is_private_v4(addr):
     return any(addr in net for net in nets)
 
 
+def _is_single_label_hostname(name):
+    """是不是合法的单标签主机名（RFC 1123 的一个 label）。
+
+    ``myhost`` / ``nas-2`` / ``a1`` -> True；
+    ``garbage value`` / ``<script>`` / ``-x`` / ``x-`` / ``""`` -> False。
+
+    这条判定是 fail-closed 的一部分：不合法的形态必须落到 public（要求口令），
+    而不是因为「不含点」就享受内网免密。
+    """
+    if not name or len(name) > 63:
+        return False
+    if name.startswith("-") or name.endswith("-"):
+        return False
+    for ch in name:
+        if not (ch.isascii() and (ch.isalnum() or ch == "-")):
+            return False
+    return True
+
+
 def classify_host(host_header):
     """把 Host 头分成 'loopback' / 'lan' / 'public'（**认不出 -> public**）。"""
     name = _hostname_of(host_header)
@@ -116,9 +135,14 @@ def classify_host(host_header):
     # 非 IP：按域名形态判断
     if name.endswith(".local") or name.endswith(".localhost"):
         return "lan"
-    # 单标签名（NetBIOS 计算机名、容器名等，不含点）-> 局域网
+    # 单标签名（NetBIOS 计算机名、容器名等，不含点）-> 局域网。
+    #
+    # 但**必须先确认它是合法的单标签主机名**（RFC 1123：字母/数字/连字符，
+    # 不以连字符开头或结尾）。否则像 "garbage value"、"<script>"、"a;b" 这类
+    # 畸形 Host 也会因为「不含点」而被当成内网 —— 那就等于给了一条
+    # 「随便编个 Host 就能免密」的绕过路径（fail-closed 的意义正在于此）。
     if "." not in name:
-        return "lan"
+        return "lan" if _is_single_label_hostname(name) else "public"
     # 其余一律公网 —— **这条是 fail-closed 的关键**：
     # 用户自建域名（DNS 指向本机端口）也会走到这里，必须要求口令。
     return "public"

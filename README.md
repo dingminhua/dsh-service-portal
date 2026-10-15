@@ -185,6 +185,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
+| `tools/check_portal_integration.py` | — | **畸形 Host 被判成内网**（`garbage value` 竟免密）、控制台链接双斜杠 |
 | `tools/check_portal_registry.py` | 88 | 路由重复/非法、key 冲突、**改完不落盘**（重启就丢）、坏文件崩溃 |
 | `tools/check_portal_console.py` | — | 未启用服务可点、服务名里塞 `<script>`（存储型 XSS）、二维码不确定 |
 | `tools/check_portal_proxy.py` | — | **自建域名被误判成内网**、认证未前置、限速失效、`cf-connecting-ip` 被伪造 |
@@ -194,6 +195,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `tools/check_plugin.py` | 41 | DSH 插件 exports 契约、报告 running 却服务已死、口令形态配错 |
 
 ```powershell
+python -X utf8 tools\check_portal_integration.py
 python -X utf8 tools\check_portal_registry.py
 python -X utf8 tools\check_portal_console.py
 python -X utf8 tools\check_portal_proxy.py
@@ -227,6 +229,9 @@ python -X utf8 tools\check_plugin.py
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
 & $node --test test/host.test.mjs      # 24 项宿主端控制检验
 & $node --test test/client.test.mjs    # 17 项客户端分发契约检验
+
+# 端到端验收：真起门户进程，逐条验证「内网免密/外网口令/页面管理服务/限速/健康检查」
+python -X utf8 test\acceptance_portal.py    # 29 项
 
 # 认证层与路由层的控制检验（纯标准库）
 python -X utf8 tools\check_portal_auth.py    # 35 项：登录页/会话/认证前置
