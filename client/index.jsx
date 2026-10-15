@@ -113,9 +113,9 @@ const styles = {
   warnInline: {
     color: "var(--dsw-alias-state-warning-primary,#d97706)", fontSize: 12,
   },
-  // 右上角「⭐ 求颗 Star」：一句链接，右对齐且不换行
+  // 右上角「鼓励一下 ★」：一句灰色下划线短链接（用户指定的最终形态）
   creditLink: {
-    color: "var(--dsw-alias-brand-primary,#4f6ef7)", fontSize: 12,
+    color: "var(--dsw-alias-label-tertiary,#8b93a1)", fontSize: 12,
     lineHeight: 1.6, textDecoration: "underline",
     whiteSpace: "nowrap", flexShrink: 0, marginLeft: 12,
   },
@@ -416,8 +416,8 @@ function ServicePortalSettingsTab() {
     ),
     h("a", {
       href: REPO_URL, target: "_blank", rel: "noreferrer",
-      style: styles.creditLink,
-    }, "⭐ 顺手留颗 Star，作者能高兴一整天"),
+      style: styles.creditLink, title: "去 GitHub 给这个项目留颗 Star",
+    }, "鼓励一下 ★"),
   ));
 
   // 状态行
