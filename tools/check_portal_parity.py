@@ -122,8 +122,12 @@ def main():
           and "key: \"prob\"" in client,
           "（用户自己停的也算正常状态）")
     check("未启动时不显示「拿到口令的人可以…」警示（还轮不到）",
+          # 现在警示按**实际状态**出现，且公网风险已合并进「公网访问」区块
+          # （用户管理公网的地方），页尾只留"局域网免密"这一条跨区块的全局提示。
+          # 断言它的守卫与去重：底部只在 running && 免密 时出现，且不重复提公网。
           client.count("拿到口令的人可以启停你开放的服务") == 1
-          and "if (running) {\n    children.push(h(\"div\", { key: \"warn\"" in client)
+          and "if (running && lanAuth === false) {" in client
+          and "公网暴露风险" in client)
     check("停止失败要报出来（宿主回 ok:false + stderr 时不能静默）",
           'if (r && r.ok === false)' in client
           and "没能停止门户" in client,
@@ -327,8 +331,10 @@ def main():
           and "MIN_PASSWORD_LEN = 12" in login)
     check("有**成块**的公网风险警示（warnBox，不是一行灰字）",
           "warnBox:" in client and 'styles.warnBox' in client)
-    check("警示讲到了「拿到口令的人就能访问你开放的服务」",
-          "拿到口令的人就能访问你开放的服务" in client)
+    check("警示讲到了「拿到口令的人就能启停你开放的服务」",
+          # 断言**含义**而不是某一版措辞：这条被改写/润色过两次，
+          # 绑字面量会让"改进文案"变成"检验失败"，把人逼回去改文案。
+          "拿到口令的人" in client and "启停你开放的服务" in client)
     check("警示提醒了「地址会变 / 勿收藏」（学 dsh-pocket 的临时性警示）",
           "请勿收藏" in client and "每次开启都会变" in client)
     check("自定义输入态里也有警告（用户是在这里输入密码的）",
@@ -352,6 +358,31 @@ def main():
           and '"public_password"' in run)
     check("停止门户时保留公网自定义口令（KEEP_ON_STOP）",
           '"public_password", "public_pin_custom"' in run)
+
+    # ================= ⑤ 动作区排版：按钮与说明分层 =================
+    #
+    # 用户指那一块「设计的好看点」。原样是：按钮右边紧跟一句说明，窄面板下被
+    # 挤断、读起来像按钮标签的一部分；一行里既有"能做什么"又有"会有什么后果"。
+    # 现在动作行只放动作，说明**另起一行**当副文本；每个动作区都有小标题。
+    print("\n[⑤ 动作区排版：按钮与说明分层]")
+    check("有专门的按钮行样式（动作不与说明混排）",
+          "actionRow:" in client and "styles.actionRow" in client)
+    check("「打开控制台」的说明文字另起一行（不再挤在按钮右边）",
+          '"在控制台里添加服务、设置路由路径、逐个开关。"' in client
+          and "在控制台里添加服务、设置路由路径、逐个开关\"),\n      )," not in client)
+    check("「停止门户」的后果说明另起一行",
+          '"停止后内网 / 公网地址都会失效，设置与口令保留。"' in client)
+    check("门户进程那段有小标题（与「服务控制台」同级，读起来是两块）",
+          '"门户进程"' in client)
+    check("底部不再重复公网风险（与公网区块同主题，去重）",
+          client.count("拿到口令的人可以启停你开放的服务") == 1)
+    check("未开公网时不再教用户「点关闭公网」（那个按钮那时不在）",
+          "不用时请点上方「关闭公网」" in client
+          and "children.push(h(\"div\", { key: \"warn\", style: styles.warn }," not in client)
+    check("警示不再用 emoji 当结构标记（改用色条 + 加粗标题）",
+          "⚠️ 公网暴露风险" not in client and "⚠ 公网开启后" not in client)
+    check("底部警示只在「免密」时出现（跨区块的全局安全提示）",
+          "if (running && lanAuth === false) {" in client)
 
     passed = sum(1 for ok in results if ok)
     print("\n设置页三处对齐控制检验：%d/%d" % (passed, len(results)))
