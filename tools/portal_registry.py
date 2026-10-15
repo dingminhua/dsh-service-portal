@@ -197,7 +197,14 @@ class Registry:
         entry = dict(entry)
         key = _validate_key(entry.get("key"))
         if key in self._entries:
-            raise RegistryError("服务 key %s 已存在" % key)
+            # 面向用户的提示要提**路由路径**而不是内部 key：
+            # 控制台表单只让用户填 mount，key 是从 mount 派生的（用户根本不知道
+            # 有这个 key）。报「key rltrain 已存在」会让人一头雾水。
+            mount = entry.get("mount")
+            if mount:
+                raise RegistryError("路由路径 %s 已经被占用了，换一个（例如 %s2）"
+                                    % (mount, mount))
+            raise RegistryError("服务 %s 已存在" % key)
 
         name = entry.get("name")
         if name is None:

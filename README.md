@@ -206,6 +206,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
+| `tools/check_portal_form.py` | 8 | **控制台表单提交被当成坏 JSON**（页面上点「添加服务」永远失败）、表单没有 key 字段导致必然失败 |
 | `tools/check_portal_tunnel.py` | 11 | **门户已在跑时「开启公网访问」什么都不做**（幂等检查把建隧道也跳过了）、「关闭公网」把整个门户停掉 |
 | `tools/check_portal_bind.py` | 7 | **只绑 127.0.0.1**（手机永远连不上）、Windows `SO_REUSEADDR` 重复绑定（流量随机分流）、端口被占不换端口 |
 | `tools/check_portal_websocket.py` | 8 | 升级头被过滤（握手失败）、101 响应没原样回传、握手后没有双向管道（实时数据不刷新） |

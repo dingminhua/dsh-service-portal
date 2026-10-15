@@ -484,6 +484,36 @@ def run_portal(args):
         except OSError:
             pass
 
+    def parse_body(handler, body):
+        """把请求体解析成 dict —— **同时接受 JSON 与表单**。
+
+        为什么必须两种都收（实测踩到的真 bug）：
+        控制台页面用的是**原生表单提交**（`<form method="POST">`，浏览器发
+        `application/x-www-form-urlencoded`）。早先这里只 `json.loads`，
+        于是页面上点「添加服务」永远得到 `请求体不是合法 JSON` ——
+        功能看起来在，实际一个服务都加不进去。
+
+        表单是网页最自然的提交方式，不该为了配合后端而被迫改写成 JS fetch；
+        而插件/脚本调用走 JSON 更自然。两种都收，各自自然。
+        """
+        text = (body or b"").decode("utf-8", "replace").strip()
+        if not text:
+            return {}
+        ctype = (handler.headers.get("Content-Type") or "").lower()
+        looks_json = text[:1] in ("{", "[")
+        if "json" in ctype or (looks_json and "form" not in ctype):
+            try:
+                parsed = json.loads(text)
+                return parsed if isinstance(parsed, dict) else {"value": parsed}
+            except ValueError:
+                pass                      # 落到表单解析兜底
+        # 表单：k=v&k=v（urlencoded）。multipart 不做完整解析，只取最简单的部分。
+        try:
+            fields = urllib.parse.parse_qs(text, keep_blank_values=True)
+            return {k: (v[0] if len(v) == 1 else v) for k, v in fields.items()}
+        except Exception:
+            return {}
+
     def api_handler(handler, method, route, body):
         """控制台 API。所有写操作都落注册表，立即生效。"""
         if method == "GET" and route == "/services":
@@ -525,11 +555,7 @@ def run_portal(args):
             })
             return True
         if method == "POST" and route == "/settings":
-            try:
-                data = json.loads(body.decode("utf-8") or "{}")
-            except ValueError:
-                handler._send_json(400, {"ok": False, "error": "请求体不是合法 JSON"})
-                return True
+            data = parse_body(handler, body)
             if "lanAuthEnabled" in data:
                 runtime["lan_auth"] = bool(data["lanAuthEnabled"])
             if "lanEnabled" in data:
@@ -576,11 +602,15 @@ def run_portal(args):
             handler._send_json(200, {"ok": True})
             return True
         if method == "POST" and route == "/services":
-            try:
-                data = json.loads(body.decode("utf-8") or "{}")
-            except ValueError:
-                handler._send_json(400, {"ok": False, "error": "请求体不是合法 JSON"})
-                return True
+            data = parse_body(handler, body)
+            # 控制台表单只收集「名称 / 路由路径 / 上游 / 备注」——**没有 key**。
+            # 但注册表要求一个内部标识符 key（用于 API 路径与状态文件）。
+            # 用户不该为了加个服务去起一个内部 key，所以这里**从路由路径派生**：
+            #   /rltrain -> rltrain  ·  /a/b -> a_b  ·  非法字符一律转下划线。
+            # 只有在完全没有 mount 时才让注册报表（那时确实是缺必填项）。
+            if not str(data.get("key") or "").strip() and str(data.get("mount") or "").strip():
+                data = dict(data)
+                data["key"] = derive_key_from_mount(data["mount"])
             try:
                 entry = registry.add(data)
             except portal_registry.RegistryError as exc:
@@ -630,11 +660,7 @@ def run_portal(args):
                 handler._send_json(200, {"ok": True})
                 return True
             if method == "POST" and action == "update":
-                try:
-                    data = json.loads(body.decode("utf-8") or "{}")
-                except ValueError:
-                    handler._send_json(400, {"ok": False, "error": "请求体不是合法 JSON"})
-                    return True
+                data = parse_body(handler, body)
                 try:
                     updated = registry.update(key, data)
                 except portal_registry.RegistryError as exc:
@@ -806,6 +832,29 @@ def print_status():
     if not alive:
         print("提示：状态文件还在但端口没监听 —— 门户已停止或异常退出。")
     return 0
+
+
+def derive_key_from_mount(mount):
+    """从路由路径派生服务 key：/rltrain -> rltrain，/a/b -> a_b。
+
+    控制台表单只让用户填「名称 / 路由路径 / 上游 / 备注」——那是用户能理解的东西；
+    key 是内部标识符（用于 API 路径与状态），不该要用户自己想一个。
+    非法字符统一转下划线，并截断到 32 字符（与注册表的校验一致）。
+
+    全中文等无法转成 ASCII 的路径（`/中文`）会派生出空串 —— 那时退回一个
+    基于路径的稳定短哈希（`svc_<hash>`），保证用户仍能添加成功。
+    只有 mount 本身为空才返回空串，交给注册表报「不能为空」。
+    """
+    text = str(mount or "").strip().strip("/")
+    if not text:
+        return ""
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_")
+    if safe:
+        return safe[:32]
+    # 全非 ASCII（如 /中文路径）：用稳定哈希兜底，保证能加进去
+    import hashlib
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+    return "svc_" + digest
 
 
 def _pids_listening_on(port):
