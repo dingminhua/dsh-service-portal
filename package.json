@@ -1,8 +1,8 @@
 {
   "name": "dsh-service-portal",
   "displayName": "DSH Service Portal",
-  "description": "对外服务门户：内网 + 外网两种入口，自带网页控制台管理要开放的服务与路由（cloudflared 隧道 + 口令登录，内网免密、外网必须口令）。",
-  "version": "0.4.0",
+  "description": "对外服务门户：装好即用，设置页内网/公网二维码扫码进控制台管理服务与路由（cloudflared 隧道 + 口令登录，内网免密可开密码、外网必须口令）。",
+  "version": "0.5.0",
   "author": "dingminhua",
   "copyright": "Copyright (c) 2026 LaoDing",
   "license": "MIT",

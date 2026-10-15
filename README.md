@@ -31,18 +31,28 @@
 
 ## 功能特性
 
-- **自带控制台网页** —— 门户本身就是一张网页：在页面上增删要开放的服务、设置路由路径、
-  逐个开关，开启后点链接直接访问。**不用改配置文件、不用重启**。
+- **装好即用，不用先点开关** —— 插件加载后门户自动起来（**只开内网**，不会自动把本机
+  服务挂到公网）。打开设置页就能看到内网地址和二维码，扫一下就进。
+  外网暴露必须由你显式点「开启公网访问」。
+- **设置页就是 dsh-pocket 那个形态** —— 局域网、公网两个区块，各自带开关 + 二维码 +
+  地址 + 访问密码行 + 高级（手动选地址）。
+- **自带控制台网页** —— 扫码打开的就是门户控制台：在页面上增删要开放的服务、设置路由
+  路径、逐个开关，开启后点链接直接访问。**不用改配置文件、不用重启**。
 - **内网 + 外网两种访问** —— 同一张页面，两条入口：
-  - 内网（`http://192.168.x.x:8899`）**免密**，同一 WiFi 下手机/平板直接打开；
+  - 内网（`http://192.168.x.x:8899`）默认**免密**，同一 WiFi 下手机/平板直接打开。
+    可开「局域网访问密码」，也可以直接关掉整个局域网访问；
   - 外网（`https://<随机>.trycloudflare.com`）**必须口令**，人在外面也能用。
-- **手机扫码即用** —— 控制台显示二维码，手机扫一下就到（页面按窄屏自适应）。
+  - 两个开关**改完立即生效**，不用重启门户（重启会换掉隧道域名，代价太大）。
+  - **本机访问永远免密** —— 否则你在电脑上连自己的门户都进不去。
+- **手机扫码即用** —— 设置页与控制台都显示二维码（内联 SVG，不依赖外部请求），
+  手机扫一下就到；页面按窄屏自适应。
 - **只需口令，不要账号** —— 自定义登录页（只有口令输入框），不弹浏览器原生
   「账号 + 密码」框；口令可**每次随机**或**你自己设固定值**。
 - **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
-- **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点。
-- **控制检验**（本仓库硬纪律）—— 注册表 88 + 控制台 + 代理 + 认证 35 + 路由 35 项、
-  域名 10 项；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
+- **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点；
+  健康检查是**真探测**（TCP 连上游端口），不是标记位。
+- **控制检验**（本仓库硬纪律）—— 8 项 Python 控制检验 + 5 个端到端脚本 + 44 项 Node
+  检验；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
 
 ## 工作原理
 
@@ -99,11 +109,22 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 | `pythonPath` | 空 | 拉服务用的解释器；留空则自动选 `.venv313` → `.runtime` → PATH |
 | `passwordMode` | `random` | 口令形态：`random` 每次开启自动生成 / `fixed` 用固定口令 |
 | `fixedPassword` | 空 | `passwordMode = fixed` 时使用，至少 12 字符（保存时即校验） |
+| `portalPort` | `8899` | 门户端口。只接受 1–65535 的整数，非法值回落默认 |
+| `autoStart` | `true` | 插件加载后自动启动门户（**只开内网**，不建隧道） |
+| `lanAuthEnabled` | `false` | 内网访问是否要口令（`false` = 免密） |
 | `webEnabled` | `true` | 是否挂载 `/service-portal/api` 路由 |
 
 所有字段都是 `.volatile()`：改设置即时生效，不需要重挂插件。
+「局域网访问密码」「局域网访问」两个开关走门户的 `/_api/settings`，
+**改完立即生效且立即落盘**，不受「运行中不可改」限制。
 **口令形态是安全相关设置**：口令模式与固定口令在门户**运行中**不可改（先「关闭」再改），
 避免出现「界面显示的口令」与「实际生效的口令」不一致。
+
+### 为什么 `autoStart` 默认开、但只开内网
+
+对齐 dsh-pocket 的「装好即用」：装了插件打开设置页就该看到内网地址和二维码，
+而不是一片空白等着你点按钮。但**外网暴露是另一回事** —— 那是把本机服务放到公网上，
+必须由你显式决定（点「开启公网访问」），不能因为装了插件就自动发生。
 
 ### 口令的两种形态
 
@@ -185,16 +206,33 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
-| `tools/check_portal_integration.py` | — | **畸形 Host 被判成内网**（`garbage value` 竟免密）、控制台链接双斜杠 |
+| `tools/check_portal_integration.py` | — | **畸形 Host 被判成内网**（`garbage value` 竟免密）、控制台链接双斜杠、局域网总开关只改界面不改认证 |
 | `tools/check_portal_registry.py` | 88 | 路由重复/非法、key 冲突、**改完不落盘**（重启就丢）、坏文件崩溃 |
 | `tools/check_portal_console.py` | — | 未启用服务可点、服务名里塞 `<script>`（存储型 XSS）、二维码不确定 |
 | `tools/check_portal_proxy.py` | — | **自建域名被误判成内网**、认证未前置、限速失效、`cf-connecting-ip` 被伪造 |
-| `tools/check_portal_auth.py` | 35 | 未登录被放行、会话可伪造/篡改/过期不失效、cookie 装了口令本身 |
-| `tools/check_tunnel_auth.py` | 35 | 认证被绕过、前缀没剥离、多挂载走错上游、未知前缀兜底成 200 |
-| `tools/check_tunnel_domain.py` | 10 | 追加日志取到**上一次的旧域名**（外网打开 530 而本地一切正常） |
-| `tools/check_plugin.py` | 41 | DSH 插件 exports 契约、报告 running 却服务已死、口令形态配错 |
+| `tools/check_portal_auth.py` | 35 | 未登录可访问、会话被伪造/篡改/过期、口令进 cookie |
+| `tools/check_tunnel_auth.py` | 35 | 认证绕过、前缀没剥、上游错、未知前缀 200 兜底 |
+| `tools/check_tunnel_domain.py` | 10 | 复用**上一次**的域名（追加日志里读到旧行：公网 530、本机正常） |
+| `tools/check_plugin.py` | 41 | 插件导出契约、服务已死却报「运行中」、口令形态非法 |
+
+### 端到端（真起门户进程，不是单元级）
+
+| 脚本 | 项数 | 覆盖 |
+| :--- | ---: | :--- |
+| `test/acceptance_portal.py` | 29 | 页面增删改开关服务、路由改动生效、内网免密/外网口令、二维码/手机端/限速/健康检查真实性、三分类 fail-closed、依赖缺失返回 2 |
+| `test/test_autostart.py` | 4 | **插件加载后门户自动跑起来**（「装好即用」）、只开内网、内网地址可用 |
+| `test/test_lan_toggle.py` | 10 | 内网口令开关**立即生效**（不重启门户）、本机永远免密、公网不受影响、无会话被拦 |
+| `test/test_lan_switch.py` | 6 | 局域网访问总开关：关掉后内网要求口令、本机不受影响、重开恢复 |
+| `test/test_settings_data.py` | 10 | 设置页数据链：状态字段、二维码生成、二维码只给本门户地址（防图床） |
+
+**依赖缺失必须「跳过并返回 2」，不得静默通过** —— 这是本仓库的硬纪律。
 
 ```powershell
+$node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
+& $node --test test/host.test.mjs      # 27 项宿主端控制检验
+& $node --test test/client.test.mjs    # 17 项客户端分发契约检验
+
+# Python 控制检验
 python -X utf8 tools\check_portal_integration.py
 python -X utf8 tools\check_portal_registry.py
 python -X utf8 tools\check_portal_console.py
@@ -203,10 +241,14 @@ python -X utf8 tools\check_portal_auth.py
 python -X utf8 tools\check_tunnel_auth.py
 python -X utf8 tools\check_tunnel_domain.py
 python -X utf8 tools\check_plugin.py
-```
-```
 
-**依赖缺失必须「跳过并返回 2」，不得静默通过**——这是本项目的硬纪律。
+# 端到端（会真起门户进程，几十秒）
+python -X utf8 test\acceptance_portal.py
+python -X utf8 test\test_autostart.py
+python -X utf8 test\test_lan_toggle.py
+python -X utf8 test\test_lan_switch.py
+python -X utf8 test\test_settings_data.py
+```
 
 ## 安全边界（必须如实理解）
 

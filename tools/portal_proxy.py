@@ -148,6 +148,44 @@ def classify_host(host_header):
     return "public"
 
 
+def resolve_open_classes(open_classes, provider):
+    """算出「哪些来源免密」。provider 优先（设置页可即时改），出错则收紧到只免本机。"""
+    if callable(provider):
+        try:
+            return tuple(provider())
+        except Exception:
+            return ("loopback",)     # provider 出错 -> 最安全：只免本机
+    return tuple(open_classes or ())
+
+
+def lan_access_enabled(provider):
+    """局域网访问总开关。
+
+    关掉后：同一 WiFi 的请求**看不到控制台也访问不到服务**（一律要求口令）。
+    本机(loopback)不受影响，否则用户在电脑上连自己的门户都进不去。
+
+    provider 出错 -> 返回 False（收紧）：宁可多要一次口令，也不能静默放开内网。
+    """
+    if callable(provider):
+        try:
+            return bool(provider())
+        except Exception:
+            return False
+    return True
+
+
+def needs_auth(kind, open_classes=("loopback", "lan"),
+               open_classes_provider=None, lan_enabled_provider=None):
+    """该来源是否需要口令（认证层的唯一判定入口，纯函数便于控制检验直接测）。
+
+    kind: classify_host() 的分类结果（loopback / lan / public）
+    """
+    # 局域网总开关关掉时，内网按公网对待（同样要口令）。
+    if kind == "lan" and not lan_access_enabled(lan_enabled_provider):
+        return True
+    return kind not in resolve_open_classes(open_classes, open_classes_provider)
+
+
 def classify_source(addr):
     """按 socket 源地址分类（用于「谁是客户端」这个身份判断）。"""
     text = (addr or "").strip()
@@ -264,6 +302,13 @@ class PortalHandler(BaseHTTPRequestHandler):
     cookie_secure = True
     # 免密分类集合：默认内网与回环都免密（用户选定「内网免密」）
     open_classes = ("loopback", "lan")
+    # 动态免密集合（可选）：callable() -> tuple。给了它就优先于上面的静态值，
+    # 这样设置页切换「内网访问密码」能**立即生效**，不用重启门户进程
+    # （重启会换掉隧道域名，代价太大）。
+    open_classes_provider = None
+    # 局域网访问总开关（可选 provider）：callable() -> bool。返回 False 时内网按
+    # 公网对待（要口令），用于设置页的「局域网访问」总开关。
+    lan_enabled_provider = None
     upstream_timeout = 60.0
     # 回调：() -> dict(控制台 state)；以及 API 处理器
     console_state = None        # callable() -> dict
@@ -284,7 +329,12 @@ class PortalHandler(BaseHTTPRequestHandler):
         return classify_host(self.headers.get("Host", ""))
 
     def _needs_auth(self, kind):
-        return kind not in self.open_classes
+        return needs_auth(
+            kind,
+            open_classes=type(self).open_classes,
+            open_classes_provider=type(self).open_classes_provider,
+            lan_enabled_provider=type(self).lan_enabled_provider,
+        )
 
     def _authorized(self):
         token = read_session_cookie(self.headers.get("Cookie", ""))
@@ -512,6 +562,8 @@ def make_portal_server(listen_port, config, listen_host="127.0.0.1"):
         "session_ttl": int(config.get("session_ttl", DEFAULT_SESSION_TTL)),
         "cookie_secure": bool(config.get("cookie_secure", True)),
         "open_classes": tuple(config.get("open_classes", ("loopback", "lan"))),
+        "open_classes_provider": config.get("open_classes_provider"),
+        "lan_enabled_provider": config.get("lan_enabled_provider"),
         "console_state": config.get("console_state"),
         "console_page": config.get("console_page"),
         "api_handler": config.get("api_handler"),

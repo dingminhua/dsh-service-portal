@@ -36,6 +36,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -49,6 +50,7 @@ PASSWORD_FILE = os.path.join(RUNS_DIR, "portal_password.txt")
 HEALTH_PATH = "/_auth/health"
 
 DEFAULT_PORTAL_PORT = 8899
+TUNNEL_LOG = "cloudflared.log"
 DEFAULT_HOST_REPO = os.environ.get("SERVICE_HOST_REPO", r"D:\DshProject\ld-rl-poker")
 DEFAULT_CLOUDFLARED = os.path.join(
     os.path.expanduser("~"), ".dsh", "dsh-pocket", "bin", "cloudflared.exe")
@@ -293,9 +295,12 @@ def run_portal(args):
 
     public_url_holder = {"url": None}
     tunnel_proc = {"proc": None}
+    # 运行时可改的开关（改完立即生效，落盘到 runs/portal_state.json）
+    runtime = {"lan_auth": bool(args.lan_auth), "lan_enabled": True}
 
     # ---- 门户回调 ----
-    def console_state():
+    def state_snapshot():
+        """门户状态快照（控制台页面与设置页 API 共用同一份真相）。"""
         entries = []
         for entry in registry.list():
             item = dict(entry)
@@ -306,14 +311,23 @@ def run_portal(args):
             except ValueError:
                 item["alive"] = False
             entries.append(item)
+        public_url = public_url_holder["url"]
+        lan_urls = ["http://%s:%d" % (ip, args.port) for ip in detect_lan_ips()]
+        if not lan_urls:
+            lan_urls = ["http://127.0.0.1:%d" % args.port]
         return {
             "services": entries,
-            "lan_urls": ["http://%s:%d" % (ip, args.port)
-                         for ip in detect_lan_ips()],
-            "public_url": public_url_holder["url"],
+            "lan_urls": lan_urls,
+            "public_url": public_url,
             "portal_port": args.port,
             "host_repo": host_repo,
+            "lan_auth_enabled": bool(runtime["lan_auth"]),
+            "lan_enabled": bool(runtime["lan_enabled"]),
+            "password": password,
         }
+
+    def console_state():
+        return state_snapshot()
 
     def resolve_upstream(path):
         for entry in registry.list():
@@ -333,6 +347,53 @@ def run_portal(args):
                 return mount, host, port, rest
         return None
 
+    def start_tunnel_now():
+        """按需建立隧道（设置页「开启外网访问」）。返回 (ok, 说明)。"""
+        cloudflared = args.cloudflared or DEFAULT_CLOUDFLARED
+        if not os.path.isfile(cloudflared):
+            return False, "找不到 cloudflared：%s" % cloudflared
+        proc = tunnel_proc["proc"]
+        if proc is not None and proc.poll() is None and public_url_holder["url"]:
+            return True, "隧道已在运行"
+        try:
+            since = os.path.getsize(_log_path(TUNNEL_LOG))
+        except OSError:
+            since = 0
+        log = open(_log_path(TUNNEL_LOG), "ab")
+        proc = subprocess.Popen(
+            [cloudflared, "--no-autoupdate", "tunnel",
+             "--url", "http://127.0.0.1:%d" % args.port, "--protocol", "http2"],
+            stdout=log, stderr=subprocess.STDOUT, creationflags=_detached_flags())
+        tunnel_proc["proc"] = proc
+        url = read_url(TUNNEL_LOG, timeout=75, since=since)
+        public_url_holder["url"] = url
+        # 隧道地址变了要写回状态文件，否则设置页/状态命令看到的还是旧地址
+        try:
+            st = load_state() or {}
+            st["public_url"] = url
+            save_state(st)
+        except OSError:
+            pass
+        if not url:
+            return False, "隧道未在 75 秒内给出地址，见 %s" % _log_path(TUNNEL_LOG)
+        return True, url
+
+    def stop_tunnel_now():
+        proc = tunnel_proc["proc"]
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        tunnel_proc["proc"] = None
+        public_url_holder["url"] = None
+        try:
+            st = load_state() or {}
+            st["public_url"] = None
+            save_state(st)
+        except OSError:
+            pass
+
     def api_handler(handler, method, route, body):
         """控制台 API。所有写操作都落注册表，立即生效。"""
         if method == "GET" and route == "/services":
@@ -340,6 +401,77 @@ def run_portal(args):
             return True
         if method == "GET" and route == "/state":
             handler._send_json(200, dict(console_state(), ok=True))
+            return True
+        if method == "GET" and route == "/qr":
+            # 供插件设置页取二维码：?url=<地址>（只允许本地/隧道地址，防被当图床滥用）
+            raw = urllib.parse.urlparse(handler.path).query
+            target = urllib.parse.parse_qs(raw).get("url", [""])[0]
+            if not target:
+                handler._send_json(400, {"ok": False, "error": "缺少 url 参数"})
+                return True
+            allowed = set(state_snapshot()["lan_urls"])
+            public = public_url_holder["url"]
+            if public:
+                allowed.add(public)
+            if target not in allowed:
+                handler._send_json(403, {"ok": False,
+                                         "error": "只允许为本门户的地址生成二维码"})
+                return True
+            try:
+                import portal_console
+                data_uri = portal_console.qr_data_uri(target)
+            except Exception as exc:
+                handler._send_json(500, {"ok": False, "error": repr(exc)})
+                return True
+            handler._send_json(200, {"ok": True, "url": target, "qr": data_uri})
+            return True
+        if method == "GET" and route == "/settings":
+            handler._send_json(200, {
+                "ok": True,
+                "lan_auth_enabled": bool(runtime["lan_auth"]),
+                "lan_enabled": bool(runtime["lan_enabled"]),
+                "public_url": public_url_holder["url"],
+                "has_tunnel": tunnel_proc["proc"] is not None,
+            })
+            return True
+        if method == "POST" and route == "/settings":
+            try:
+                data = json.loads(body.decode("utf-8") or "{}")
+            except ValueError:
+                handler._send_json(400, {"ok": False, "error": "请求体不是合法 JSON"})
+                return True
+            if "lanAuthEnabled" in data:
+                runtime["lan_auth"] = bool(data["lanAuthEnabled"])
+            if "lanEnabled" in data:
+                runtime["lan_enabled"] = bool(data["lanEnabled"])
+            # 立即落盘，重启门户后开关还在（不落盘就是「改完就丢」）
+            try:
+                st = load_state() or {}
+                st["lan_auth_enabled"] = bool(runtime["lan_auth"])
+                st["lan_enabled"] = bool(runtime["lan_enabled"])
+                save_state(st)
+            except OSError as exc:
+                handler._send_json(500, {"ok": False, "error": "写状态失败：%r" % exc})
+                return True
+            handler._send_json(200, {
+                "ok": True,
+                "lan_auth_enabled": bool(runtime["lan_auth"]),
+                "lan_enabled": bool(runtime["lan_enabled"]),
+            })
+            return True
+        if method == "POST" and route == "/tunnel/start":
+            if public_url_holder["url"]:
+                handler._send_json(200, {"ok": True,
+                                         "public_url": public_url_holder["url"],
+                                         "note": "隧道已在运行"})
+                return True
+            ok, detail = start_tunnel_now()
+            handler._send_json(200 if ok else 502, {
+                "ok": ok, "public_url": public_url_holder["url"], "detail": detail})
+            return True
+        if method == "POST" and route == "/tunnel/stop":
+            stop_tunnel_now()
+            handler._send_json(200, {"ok": True})
             return True
         if method == "POST" and route == "/services":
             try:
@@ -414,7 +546,12 @@ def run_portal(args):
     server = portal_proxy.make_portal_server(args.port, {
         "password": password,
         "cookie_secure": False,     # 内网是 http；公网经隧道是 https 也能用
-        "open_classes": ("loopback", "lan"),   # 内网免密（用户已确认）
+        # 内网免密开关**动态可改**：设置页切「局域网访问密码」时立即生效，
+        # 不重启门户（重启会换掉隧道域名，代价太大）。
+        # loopback 永远免密：那是本机自己，要求口令毫无意义。
+        "open_classes_provider": lambda: (
+            ("loopback",) if runtime["lan_auth"] else ("loopback", "lan")),
+        "lan_enabled_provider": lambda: runtime["lan_enabled"],
         "console_state": console_state,
         "console_page": lambda state, is_public: portal_console.console_html(
             state, is_public=is_public),
@@ -424,40 +561,28 @@ def run_portal(args):
     })
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    # ---- 隧道 ----
-    tunnel_log = "cloudflared.log"
+    # ---- 隧道（复用 start_tunnel_now，避免同一段逻辑写两份）----
     if not args.lan_only:
-        cloudflared = args.cloudflared or DEFAULT_CLOUDFLARED
-        if not os.path.isfile(cloudflared):
-            print("提示：找不到 cloudflared（%s），只开内网。"
-                  "可用 --cloudflared 指定，或加 --lan-only 跳过。" % cloudflared,
-                  file=sys.stderr)
+        if not os.path.isfile(args.cloudflared or DEFAULT_CLOUDFLARED):
+            print("提示：找不到 cloudflared，只开内网。"
+                  "可用 --cloudflared 指定，或加 --lan-only 跳过。", file=sys.stderr)
         else:
-            since = 0
-            try:
-                since = os.path.getsize(_log_path(tunnel_log))
-            except OSError:
-                since = 0
-            log = open(_log_path(tunnel_log), "ab")
-            proc = subprocess.Popen(
-                [cloudflared, "--no-autoupdate", "tunnel",
-                 "--url", "http://127.0.0.1:%d" % args.port, "--protocol", "http2"],
-                stdout=log, stderr=subprocess.STDOUT, creationflags=_detached_flags())
-            tunnel_proc["proc"] = proc
             print("等待隧道建立…")
-            url = read_url(tunnel_log, timeout=75, since=since)
-            public_url_holder["url"] = url
+            ok, detail = start_tunnel_now()
+            if not ok:
+                print("隧道建立失败：%s" % detail, file=sys.stderr)
 
     save_state({
         "portal_port": args.port,
         "portal_pid": os.getpid(),
         "password": password,
         "public_url": public_url_holder["url"],
-        "lan_urls": ["http://%s:%d" % (ip, args.port) for ip in detect_lan_ips()],
+        "lan_urls": state_snapshot()["lan_urls"],
+        "lan_auth_enabled": bool(args.lan_auth),
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
 
-    lan_urls = ["http://%s:%d" % (ip, args.port) for ip in detect_lan_ips()]
+    lan_urls = state_snapshot()["lan_urls"]
     print("")
     print("=" * 66)
     print("门户已启动")
@@ -471,7 +596,7 @@ def run_portal(args):
         print("外网访问：%s" % public_url_holder["url"])
         print("  （外网需要口令；内网免密）")
     else:
-        print("外网访问：隧道未建立（见 %s）" % _log_path(tunnel_log))
+        print("外网访问：隧道未建立（见 %s）" % _log_path(TUNNEL_LOG))
     print("口令    ：%s" % password)
     print("控制台  ：在浏览器打开上面的地址即可")
     print("停止    ：Ctrl+C，或 python -X utf8 tools/portal_run.py --stop")
@@ -557,6 +682,8 @@ def build_parser():
     ap.add_argument("--cloudflared", default=DEFAULT_CLOUDFLARED,
                     help="cloudflared.exe 路径")
     ap.add_argument("--lan-only", action="store_true", help="只开内网，不建隧道")
+    ap.add_argument("--lan-auth", action="store_true",
+                    help="内网访问也要求口令（默认内网免密，仅同一局域网可用）")
     ap.add_argument("--status", action="store_true", help="显示状态")
     ap.add_argument("--stop", action="store_true", help="停止门户")
     return ap

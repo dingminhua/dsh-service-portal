@@ -256,6 +256,36 @@ test("configOf：固定口令两端空白被裁掉", () => {
   assert.equal(cfg.fixedPassword, "abcdefghijkl");
 });
 
+// ---------------------------------------------------------------------------
+// 「装好即用」相关配置（对齐 dsh-pocket 的体验）
+//
+// 拦的是这类 bug：
+//   · autoStart 默认值被写成 false → 设置页打开是空的，「默认主页没打开」；
+//   · lanAuthEnabled 默认值被写成 true → 用户以为内网免密，实际每次都要口令；
+//   · portalPort 读不回来 → 状态查询打错端口，永远显示「未运行」。
+// ---------------------------------------------------------------------------
+
+test("configOf：autoStart 默认开启（装好即用）", () => {
+  assert.equal(configOf({}).autoStart, true);
+  // 显式关掉要生效
+  assert.equal(configOf({ autoStart: { get: () => false } }).autoStart, false);
+});
+
+test("configOf：lanAuthEnabled 默认关闭（内网免密）", () => {
+  assert.equal(configOf({}).lanAuthEnabled, false);
+  assert.equal(configOf({ lanAuthEnabled: { get: () => true } }).lanAuthEnabled, true);
+});
+
+test("configOf：portalPort 默认 8899，可被配置覆盖", () => {
+  assert.equal(configOf({}).portalPort, 8899);
+  assert.equal(configOf({ portalPort: { get: () => 9123 } }).portalPort, 9123);
+  // 非法值（0 / 负 / 非数字）回落到默认，不能把端口搞成 0
+  for (const bogus of [0, -1, "abc", null]) {
+    assert.equal(configOf({ portalPort: { get: () => bogus } }).portalPort, 8899,
+      `portalPort=${bogus} 必须回落 8899`);
+  }
+});
+
 test("passwordArgs：random 模式不传任何口令参数", () => {
   const r = passwordArgs({ infraPath: tmpdir(), passwordMode: "random",
     fixedPassword: "whatever" });

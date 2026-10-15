@@ -7,15 +7,19 @@
 // 任何 DSH 安装上直接跑；用 React.createElement 别名 h() 可读性足够，
 // 换来零构建依赖。产物由 client/build.mjs 生成到 lib/client.js —— 必须放
 // lib/ 并与 package.json 的 exports["./client"] 一致（放错目录会让 DSH
-// 启动期解析失败，poker-viewer 迁移时实测过一次）。
+// 启动期解析失败，迁移时实测过一次）。
 //
 // 图标 SERVICE_PORTAL_PLUGIN_ICON 由构建脚本内联注入（来自 client/icon.ts，
 // 与 LaoDing 插件家族同一张 64px 品牌图）。
 //
-// 界面职责：
-//   · 一键开启 / 关闭外网入口（调宿主 /service-portal/api/start|stop）
-//   · 显示连接地址与**明文口令**（与 poker-viewer 同款选型：直接明文显示）
-//   · 明确警示：拿到口令 == 能启停被开放的服务
+// 界面形态（2026-10-15 重做，对齐 dsh-pocket 的设置页）：
+//   · 局域网区块：总开关 + 二维码 + 地址 + 访问密码（开关/刷新/自定义）+ 高级选地址
+//   · 公网区块：开关 + 二维码 + 地址 + 访问密码
+//   · 扫码打开的就是门户控制台（在那里管理要开放的服务）
+//
+// 与 dsh-pocket 的一个本质区别（诚实说明）：dsh-pocket 的二维码指向**一个目标**
+// （DSH 的 web 界面），我们的二维码指向**门户控制台**——扫码后是一个可管理多个
+// 服务的页面。所以这里显示的是「门户地址」，不是「某个服务地址」。
 
 // 元素创建别名：**不能**从 props 里取（DSH 的 section props 不含 h，
 // 取了会得到 undefined → 渲染期抛 "h is not a function" → 面板整片空白，
@@ -40,9 +44,17 @@ const styles = {
     color: "var(--dsw-alias-label-primary,inherit)",
   },
   row: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  rowBetween: {
+    display: "flex", gap: 8, alignItems: "center",
+    justifyContent: "space-between", flexWrap: "wrap",
+  },
   block: {
     borderTop: "1px solid var(--dsw-alias-border-l2,#e5e7eb)",
     marginTop: 14, paddingTop: 14,
+  },
+  sectionTitle: {
+    fontSize: 13, fontWeight: 600, marginBottom: 10,
+    color: "var(--dsw-alias-label-primary,inherit)",
   },
   muted: {
     color: "var(--dsw-alias-label-tertiary,#8b93a1)",
@@ -82,6 +94,13 @@ const styles = {
     color: "var(--dsw-alias-state-warn-primary,#b45309)",
     fontSize: 12, lineHeight: 1.6, marginTop: 8,
   },
+  err: {
+    color: "var(--dsw-alias-state-error-primary,#dc2626)",
+    fontSize: 12, lineHeight: 1.5, marginTop: 8, whiteSpace: "pre-wrap",
+  },
+  errInline: {
+    color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12,
+  },
   tag: {
     fontSize: 11, padding: "1px 7px", borderRadius: 999,
     background: "rgba(107,114,128,.14)",
@@ -99,13 +118,6 @@ const styles = {
     background: "var(--dsw-alias-bg-layer-1,#fff)",
     color: "var(--dsw-alias-label-primary,inherit)",
   },
-  errInline: {
-    color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12,
-  },
-  err: {
-    color: "var(--dsw-alias-state-error-primary,#dc2626)",
-    fontSize: 12, lineHeight: 1.5, marginTop: 8, whiteSpace: "pre-wrap",
-  },
   badge: (on) => ({
     display: "inline-flex", alignItems: "center", gap: 5,
     fontSize: 12, padding: "2px 9px", borderRadius: 999,
@@ -116,11 +128,42 @@ const styles = {
     width: 7, height: 7, borderRadius: 999,
     background: on ? "#16a34a" : "#9ca3af",
   }),
+  qrBox: {
+    display: "flex", flexDirection: "column", alignItems: "center",
+    margin: "10px 0 6px",
+  },
+  qrImg: {
+    width: 168, height: 168, imageRendering: "pixelated",
+    borderRadius: 8, background: "#fff", padding: 6,
+    border: "1px solid var(--dsw-alias-border-l2,#e5e7eb)",
+  },
+  // iOS 风格小开关（与 dsh-pocket 的观感一致）
+  switch: (on) => ({
+    position: "relative", width: 44, height: 26, borderRadius: 999,
+    border: "none", cursor: "pointer", flex: "0 0 auto", padding: 0,
+    background: on ? "#16a34a" : "var(--dsw-alias-border-l2,#d1d5db)",
+    transition: "background .15s",
+  }),
+  knob: (on) => ({
+    position: "absolute", top: 3, left: on ? 21 : 3,
+    width: 20, height: 20, borderRadius: 999, background: "#fff",
+    transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,.25)",
+  }),
 };
 
 function fmtTime(text) {
   if (!text) return "";
   return String(text);
+}
+
+function Switch(on, onClick, disabled) {
+  return h("button", {
+    type: "button", role: "switch", "aria-checked": !!on,
+    disabled: !!disabled,
+    style: Object.assign({}, styles.switch(on),
+      disabled ? { opacity: 0.5, cursor: "not-allowed" } : null),
+    onClick: disabled ? undefined : onClick,
+  }, h("span", { style: styles.knob(on) }));
 }
 
 function ServicePortalSettingsTab() {
@@ -129,11 +172,19 @@ function ServicePortalSettingsTab() {
   const [error, setError] = React.useState(null);
   const [output, setOutput] = React.useState(null);
   const [showPassword, setShowPassword] = React.useState(true);
-  // 口令形态设置（从宿主读回，改后写回）
-  const [pwMode, setPwMode] = React.useState(null);
-  const [pwValue, setPwValue] = React.useState("");
-  const [pwSaved, setPwSaved] = React.useState("");
-  const [pwError, setPwError] = React.useState("");
+
+  // 二维码：按地址缓存（地址不变就不重复要，避免每次轮询都打门户口）
+  const [qrs, setQrs] = React.useState({});
+  // 局域网访问密码开关（默认关 = 免密）
+  const [lanAuth, setLanAuth] = React.useState(null);
+  // 局域网访问总开关（默认开）
+  const [lanEnabled, setLanEnabled] = React.useState(true);
+  // 自定义局域网口令输入态
+  const [customOpen, setCustomOpen] = React.useState(false);
+  const [customValue, setCustomValue] = React.useState("");
+  const [customErr, setCustomErr] = React.useState("");
+  // 高级：手动选地址
+  const [advOpen, setAdvOpen] = React.useState(false);
 
   const request = async (path, method, body) => {
     const res = await fetch(API + path, {
@@ -154,56 +205,95 @@ function ServicePortalSettingsTab() {
       setStatus(s);
       if (s && s.ok === false && s.problem) setError(s.problem);
       else setError(null);
+      if (s && s.kind === "portal") {
+        setLanAuth(Boolean(s.lanAuthEnabled));
+        setLanEnabled(s.lanEnabled !== false);
+      }
     } catch (e) {
       setError(String(e && e.message ? e.message : e));
     }
   };
 
-  // 读回口令形态配置（只在首次与保存后刷新，避免覆盖用户正在输入的内容）
-  const loadSettings = async () => {
+  const loadQr = async (url) => {
+    if (!url) return;
     try {
-      const cfg = await request("/settings");
-      if (cfg && cfg.ok) {
-        setPwMode(cfg.passwordMode === "fixed" ? "fixed" : "random");
-        setPwValue(cfg.fixedPassword || "");
+      const r = await request("/qr?url=" + encodeURIComponent(url));
+      if (r && r.ok && r.qr) {
+        setQrs((prev) => (prev[url] ? prev : Object.assign({}, prev, { [url]: r.qr })));
       }
-    } catch { /* 设置读不回来不影响主要功能 */ }
+    } catch { /* 二维码取不到不影响主要功能 */ }
   };
 
   React.useEffect(() => {
     load();
-    loadSettings();
     const timer = setInterval(load, 5000);
     return () => clearInterval(timer);
   }, []);
 
-  const savePassword = async () => {
-    setPwSaved(""); setPwError("");
+  // 地址一出来就取二维码（只取没取过的）
+  const lanPrimary = status && status.lanUrls && status.lanUrls[0];
+  const publicUrl = status && status.publicUrl;
+  React.useEffect(() => { if (lanPrimary && !qrs[lanPrimary]) loadQr(lanPrimary); },
+    [lanPrimary]);
+  React.useEffect(() => { if (publicUrl && !qrs[publicUrl]) loadQr(publicUrl); },
+    [publicUrl]);
+
+  // ---- 局域网访问密码开关（立即生效，不重启门户）----
+  const setLanAuthEnabled = async (on) => {
+    setLanAuth(on);            // 乐观更新，失败再回滚
     try {
-      const r = await request("/settings", "POST", {
-        passwordMode: pwMode || "random",
-        fixedPassword: pwValue,
-      });
-      if (r && r.ok) { setPwSaved("ok"); setPwError(""); }
-      else { setPwSaved("err"); setPwError((r && r.error) || "保存失败"); }
+      const r = await request("/settings", "POST", { lanAuthEnabled: on });
+      if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+      await load();
     } catch (e) {
-      setPwSaved("err");
-      setPwError(String(e && e.message ? e.message : e));
+      setLanAuth(!on);
+      setError(String(e && e.message ? e.message : e));
     }
   };
 
-  const doStart = async () => {
-    setBusy("start"); setError(null); setOutput(null);
+  // ---- 局域网访问总开关（关掉后同一 WiFi 也进不来；公网不受影响）----
+  const setLanEnabledFlag = async (on) => {
+    setLanEnabled(on);         // 乐观更新，失败再回滚
     try {
-      const r = await request("/start", "POST");
+      const r = await request("/settings", "POST", { lanEnabled: on });
+      if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+      await load();
+    } catch (e) {
+      setLanEnabled(!on);
+      setError(String(e && e.message ? e.message : e));
+    }
+  };
+
+  const saveCustomPin = async () => {
+    setCustomErr("");
+    const value = customValue.trim();
+    if (value.length < 12) {
+      setCustomErr("口令至少 12 个字符");
+      return;
+    }
+    try {
+      const r = await request("/settings", "POST", {
+        passwordMode: "fixed", fixedPassword: value,
+      });
+      if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+      setCustomOpen(false);
+      setCustomValue("");
+      await load();
+    } catch (e) {
+      setCustomErr(String(e && e.message ? e.message : e));
+    }
+  };
+
+  const doStart = async (lanOnly) => {
+    setBusy(lanOnly ? "start-lan" : "start"); setError(null); setOutput(null);
+    try {
+      const r = await request("/start", "POST", lanOnly ? { lanOnly: true } : {});
       setOutput(r);
       if (r && r.status) setStatus(r.status);
       if (!r || r.ok !== true) {
-        setError(
-          "启动失败（退出码 " + (r && r.exitCode) + "）" +
-          (r && r.stderr ? "\n" + String(r.stderr).slice(-600) : "")
-        );
-      }
+        setError("启动失败（退出码 " + (r && r.exitCode) + "）"
+          + (r && r.stderr ? "\n" + String(r.stderr).slice(-600) : ""));
+      } else { await load(); }
     } catch (e) {
       setError(String(e && e.message ? e.message : e));
     } finally { setBusy(""); }
@@ -215,20 +305,19 @@ function ServicePortalSettingsTab() {
       const r = await request("/stop", "POST");
       setOutput(r);
       if (r && r.status) setStatus(r.status);
-      if (!r || r.ok !== true) setError("停止未成功，请查看下方输出");
+      else await load();
     } catch (e) {
       setError(String(e && e.message ? e.message : e));
     } finally { setBusy(""); }
   };
 
-  const running = !!(status && status.running);
+  const running = Boolean(status && status.running);
   const password = status && status.password;
+  const port = (status && status.portalPort) || 8899;
 
   const children = [];
 
-  // 标题行：家族图标 + 名称（与 dsh-connect-* 系列的卡片外观一致）。
-  // SERVICE_PORTAL_PLUGIN_ICON 由构建脚本从 client/icon.ts 内联进产物，
-  // 用的是 LaoDing 插件家族的同一张 64px 品牌图。
+  // 标题行
   children.push(h("div", { key: "head", style: styles.head },
     h("img", {
       src: SERVICE_PORTAL_PLUGIN_ICON, alt: "", width: 32, height: 32,
@@ -236,7 +325,8 @@ function ServicePortalSettingsTab() {
     }),
     h("div", null,
       h("div", { style: styles.title }, "对外服务门户"),
-      h("div", { style: styles.muted }, "一个域名 + 一个口令，按需开放本机服务"),
+      h("div", { style: styles.muted },
+        "手机扫码打开的就是门户控制台，在那里管理要开放的服务"),
     ),
   ));
 
@@ -245,169 +335,238 @@ function ServicePortalSettingsTab() {
     h("span", { style: styles.badge(running) },
       h("span", { style: styles.dot(running) }),
       running ? "运行中" : "已停止"),
-    status && status.mode
-      ? h("span", { style: styles.muted },
-          status.mode === "single-domain" ? "单域名 + 路径" : "两个独立域名")
-      : null,
+    h("span", { style: styles.muted }, "端口 " + port),
     status && status.startedAt
       ? h("span", { style: styles.muted }, "启动于 " + fmtTime(status.startedAt))
       : null,
   ));
 
-  // 连接信息
-  if (status && status.ok !== false) {
-    const rows = [];
-    // 新门户形态：内网 + 外网两条入口，控制台就是入口本身
-    if (status.kind === "portal") {
-      const lanList = status.lanUrls || [];
-      if (lanList.length) {
-        rows.push(h("div", { key: "lan-label", style: styles.muted },
-          "内网访问（同一 WiFi 直接打开，无需口令）"));
-        for (let i = 0; i < lanList.length; i++) {
-          rows.push(h("div", { key: "lan-" + i, style: styles.row },
-            h("span", { style: styles.label }, i === 0 ? "内网" : "内网 " + (i + 1)),
-            h("a", {
-              href: lanList[i], target: "_blank", rel: "noreferrer",
-              style: Object.assign({}, styles.code,
-                { color: "var(--dsw-alias-brand-primary,#4f6ef7)" }),
-            }, lanList[i]),
-          ));
-        }
-      }
-      rows.push(h("div", { key: "pub-label", style: styles.muted },
-        status.publicUrl
-          ? "外网访问（需输入口令）"
-          : "外网访问：未开启（可用「开启外网访问」建隧道）"));
-      if (status.publicUrl) {
-        rows.push(h("div", { key: "public", style: styles.row },
-          h("span", { style: styles.label }, "外网"),
-          h("a", {
-            href: status.publicUrl, target: "_blank", rel: "noreferrer",
-            style: Object.assign({}, styles.code,
-              { color: "var(--dsw-alias-brand-primary,#4f6ef7)" }),
-          }, status.publicUrl),
-        ));
-      }
-    }
-    if (status.baseUrl && status.kind !== "portal") {
-      rows.push(h("div", { key: "base", style: styles.row },
-        h("span", { style: styles.label }, "入口"),
-        h("a", {
-          href: status.baseUrl, target: "_blank", rel: "noreferrer",
-          style: Object.assign({}, styles.code, { color: "var(--dsw-alias-brand-primary,#4f6ef7)" }),
-        }, status.baseUrl),
+  // ============ 局域网区块 ============
+  if (running) {
+    const lanRows = [];
+    lanRows.push(h("div", { key: "lan-head", style: styles.rowBetween },
+      h("div", { style: styles.sectionTitle, marginBottom: 0 }, "局域网访问"),
+      Switch(lanEnabled, () => setLanEnabledFlag(!lanEnabled)),
+    ));
+
+    if (lanPrimary) {
+      lanRows.push(h("div", { key: "lan-qr", style: styles.qrBox },
+        lanEnabled
+          ? (qrs[lanPrimary]
+              ? h("img", { src: qrs[lanPrimary], alt: "局域网二维码",
+                           style: styles.qrImg })
+              : h("div", { style: Object.assign({}, styles.qrImg, {
+                  display: "flex", alignItems: "center", justifyContent: "center" }),
+                }, h("span", { style: styles.muted }, "二维码生成中…")))
+          : h("div", { style: Object.assign({}, styles.qrImg, {
+              display: "flex", alignItems: "center", justifyContent: "center",
+              opacity: 0.4 }),
+            }, h("span", { style: styles.muted }, "已关闭")),
+        h("code", { style: Object.assign({}, styles.code, { marginTop: 8 }) },
+          lanPrimary),
+        h("div", { style: styles.muted },
+          lanEnabled
+            ? "手机连接同一 WiFi 后扫码即可打开"
+            : "🔒 局域网访问已关闭：手机扫码/链接均不可用（公网不受影响）。点右上开关恢复。"),
       ));
+    } else {
+      lanRows.push(h("div", { key: "lan-none", style: styles.muted },
+        "没探测到局域网地址（可能没连 WiFi 或只有回环）。"
+        + "本机可用 http://127.0.0.1:" + port));
     }
-    for (const ep of status.kind === "portal" ? [] : (status.endpoints || [])) {
-      rows.push(h("div", { key: "ep-" + ep.key, style: styles.row },
-        h("span", { style: styles.label }, ep.name || ep.key),
-        h("a", {
-          href: ep.url, target: "_blank", rel: "noreferrer",
-          style: Object.assign({}, styles.code, { color: "var(--dsw-alias-brand-primary,#4f6ef7)" }),
-        }, ep.url || "(无地址)"),
-      ));
-    }
-    if (password) {
-      rows.push(h("div", { key: "pass", style: styles.row },
-        h("span", { style: styles.label }, "口令"),
-        h("code", { style: styles.code }, showPassword ? password : "•".repeat(password.length)),
-        h("span", { style: styles.tag },
-          status.passwordMode === "fixed" ? "固定口令" : "本次随机"),
+
+    // 局域网访问密码行
+    lanRows.push(h("div", { key: "lan-pin", style: styles.rowBetween },
+      h("div", null,
+        h("div", { style: styles.sectionTitle, marginBottom: 2 }, "局域网访问密码"),
+        h("div", { style: styles.muted },
+          lanAuth
+            ? "已开启：同一 WiFi 打开也要输口令"
+            : "已关闭：同一 WiFi 扫码直连（公网仍要口令）"),
+      ),
+      Switch(lanAuth === true, () => setLanAuthEnabled(lanAuth !== true)),
+    ));
+
+    if (lanAuth) {
+      lanRows.push(h("div", { key: "lan-pin-value", style: styles.row },
+        h("code", { style: styles.code },
+          showPassword ? (password || "(无)") : "•".repeat((password || "").length)),
         h("button", {
           style: styles.btn, type: "button",
           onClick: () => setShowPassword(!showPassword),
         }, showPassword ? "隐藏" : "显示"),
         h("button", {
           style: styles.btn, type: "button",
-          onClick: () => {
-            try { navigator.clipboard.writeText(password); } catch { /* 忽略 */ }
+          onClick: async () => {
+            // 刷新口令 = 立刻换一个新的（旧的立即作废）
+            try {
+              const value = Math.random().toString(36).slice(2, 10)
+                + Math.random().toString(36).slice(2, 10);
+              const r = await request("/settings", "POST", {
+                passwordMode: "fixed", fixedPassword: value,
+              });
+              if (r && r.ok) await load();
+            } catch { /* 忽略 */ }
           },
-        }, "复制"),
+        }, "刷新"),
+        !customOpen
+          ? h("button", {
+              style: styles.btn, type: "button",
+              onClick: () => { setCustomOpen(true); setCustomErr(""); },
+            }, "自定义")
+          : null,
       ));
-      rows.push(h("div", { key: "login-hint", style: styles.muted },
-        "打开上面的地址后，只需输入这一个口令（没有账号）。"));
     }
-    if (rows.length) {
-      children.push(h("div", { key: "conn", style: styles.block }, rows));
+
+    if (customOpen) {
+      lanRows.push(h("div", { key: "lan-custom", style: styles.row },
+        h("input", {
+          type: "text", value: customValue, style: styles.input,
+          placeholder: "新口令（12–64 位）", autoComplete: "off",
+          onChange: (e) => setCustomValue(e.target.value),
+        }),
+        h("button", { style: styles.primary, type: "button",
+                      onClick: saveCustomPin }, "保存"),
+        h("button", { style: styles.btn, type: "button",
+                      onClick: () => { setCustomOpen(false); setCustomErr(""); } },
+          "取消"),
+        customErr ? h("span", { style: styles.errInline }, customErr) : null,
+      ));
     }
+
+    // 高级：手动选地址
+    lanRows.push(h("div", { key: "lan-adv", style: styles.rowBetween },
+      h("button", {
+        style: Object.assign({}, styles.btn, { border: "none", padding: 0,
+          background: "transparent", color: "var(--dsw-alias-label-secondary,#6b7280)" }),
+        type: "button",
+        onClick: () => setAdvOpen(!advOpen),
+      }, "高级 · 手动选地址 " + (advOpen ? "▾" : "›")),
+      h("span", { style: styles.muted }, "自动（推荐）"),
+    ));
+    if (advOpen) {
+      const all = (status.lanUrls || []);
+      if (!all.length) {
+        lanRows.push(h("div", { key: "adv-none", style: styles.muted },
+          "没有可选的地址。"));
+      }
+      for (let i = 0; i < all.length; i++) {
+        lanRows.push(h("div", { key: "adv-" + i, style: styles.row },
+          h("code", { style: styles.code }, all[i]),
+          h("button", {
+            style: styles.btn, type: "button",
+            onClick: () => { try { navigator.clipboard.writeText(all[i]); } catch { /* 忽略 */ } },
+          }, "复制"),
+        ));
+      }
+      lanRows.push(h("div", { key: "adv-note", style: styles.muted },
+        "地址由网卡自动探测；要固定用哪个，把上面的地址发给对方即可。"));
+    }
+
+    children.push(h("div", { key: "lan", style: styles.block }, lanRows));
   }
 
-  // 口令形态（两选一）：每次随机 / 固定口令
-  const mode = pwMode || "random";
-  children.push(h("div", { key: "pwsection", style: styles.block },
-    h("div", { style: styles.label, marginBottom: 8 }, "口令形态"),
-    h("div", { style: styles.row },
-      h("label", { style: styles.radio },
-        h("input", {
-          type: "radio", name: "sp-pw-mode", checked: mode === "random",
-          disabled: running,
-          onChange: () => setPwMode("random"),
-        }),
-        "每次开启自动生成新口令",
-      ),
-      h("label", { style: styles.radio },
-        h("input", {
-          type: "radio", name: "sp-pw-mode", checked: mode === "fixed",
-          disabled: running,
-          onChange: () => setPwMode("fixed"),
-        }),
-        "固定口令",
-      ),
-    ),
-    mode === "fixed"
-      ? h("div", { style: Object.assign({}, styles.row, { marginTop: 8 }) },
-          h("input", {
-            type: "password", value: pwValue, placeholder: "至少 12 个字符",
-            disabled: running, autoComplete: "new-password",
-            style: styles.input,
-            onChange: (event) => setPwValue(event.target.value),
-          }),
-          h("button", {
-            style: styles.btn, type: "button", disabled: running,
-            onClick: savePassword,
-          }, "保存"),
-          pwSaved === "ok"
-            ? h("span", { style: styles.tag }, "已保存")
-            : (pwSaved === "err" ? h("span", { style: styles.errInline }, pwError || "保存失败") : null),
-        )
-      : h("div", { style: styles.muted },
-          "每次开启都会换一个新口令；域名也是随机的。"),
-    running
-      ? h("div", { style: styles.muted }, "（运行中不能改口令形态，先点「关闭」）")
-      : null,
+  // ============ 公网区块 ============
+  const pubRows = [];
+  pubRows.push(h("div", { key: "pub-head", style: styles.rowBetween },
+    h("div", { style: styles.sectionTitle, marginBottom: 0 }, "公网访问"),
+    publicUrl
+      ? h("button", { style: styles.danger, type: "button",
+                      disabled: !!busy, onClick: doStop },
+          busy === "stop" ? "关闭中…" : "关闭公网")
+      : h("button", {
+          style: styles.primary, type: "button",
+          disabled: !!busy || !running,
+          onClick: () => doStart(false),
+        }, busy === "start" ? "开启中…" : "开启公网访问"),
   ));
 
-  // 操作按钮
-  children.push(h("div", { key: "actions", style: Object.assign({}, styles.row, { marginTop: 14 }) },
-    // 控制台入口：门户自己就是控制台，在页面上管理服务
-    running && status && status.portalUrl
-      ? h("a", {
-          href: status.portalUrl, target: "_blank", rel: "noreferrer",
+  if (publicUrl) {
+    pubRows.push(h("div", { key: "pub-qr", style: styles.qrBox },
+      qrs[publicUrl]
+        ? h("img", { src: qrs[publicUrl], alt: "公网二维码",
+                     style: styles.qrImg })
+        : h("div", { style: Object.assign({}, styles.qrImg, {
+            display: "flex", alignItems: "center", justifyContent: "center" }),
+          }, h("span", { style: styles.muted }, "二维码生成中…")),
+      h("code", { style: Object.assign({}, styles.code, { marginTop: 8 }) },
+        publicUrl),
+      h("div", { style: styles.muted }, "人在外面也能打开（需要口令）"),
+    ));
+    pubRows.push(h("div", { key: "pub-pin", style: styles.rowBetween },
+      h("div", null,
+        h("div", { style: styles.sectionTitle, marginBottom: 2 }, "公网访问密码"),
+        h("div", { style: styles.muted }, "每次开启公网都会换新；也可在控制台里改"),
+      ),
+      h("span", { style: styles.tag },
+        status && status.passwordMode === "fixed" ? "固定口令" : "本次随机"),
+    ));
+    if (password) {
+      pubRows.push(h("div", { key: "pub-pin-value", style: styles.row },
+        h("code", { style: styles.code },
+          showPassword ? password : "•".repeat(password.length)),
+        h("button", {
+          style: styles.btn, type: "button",
+          onClick: () => setShowPassword(!showPassword),
+        }, showPassword ? "隐藏" : "显示"),
+        h("button", {
+          style: styles.btn, type: "button",
+          onClick: () => { try { navigator.clipboard.writeText(password); } catch { /* 忽略 */ } },
+        }, "复制"),
+      ));
+    }
+    pubRows.push(h("div", { key: "pub-hint", style: styles.muted },
+      "地址是随机 trycloudflare 域名，每次开启都会变。"));
+  } else {
+    pubRows.push(h("div", { key: "pub-none", style: styles.muted },
+      running
+        ? "未开启。点右上「开启公网访问」建立一个随机公网地址（需本机有 cloudflared）。"
+        : "门户未运行。"));
+  }
+
+  children.push(h("div", { key: "pub", style: styles.block }, pubRows));
+
+  // ============ 控制台入口 ============
+  if (running) {
+    children.push(h("div", { key: "console", style: styles.block },
+      h("div", { style: styles.sectionTitle }, "服务控制台"),
+      h("div", { style: styles.row },
+        h("a", {
+          href: status.portalUrl || ("http://127.0.0.1:" + port),
+          target: "_blank", rel: "noreferrer",
           style: Object.assign({}, styles.primary, { textDecoration: "none" }),
-        }, "打开控制台")
+        }, "打开控制台"),
+        h("span", { style: styles.muted },
+          "在控制台里添加服务、设置路由路径、逐个开关"),
+      ),
+    ));
+  }
+
+  // ============ 门户进程控制 ============
+  children.push(h("div", { key: "actions",
+    style: Object.assign({}, styles.row, { marginTop: 14 }) },
+    !running
+      ? h("button", {
+          style: styles.primary, type: "button", disabled: !!busy,
+          onClick: () => doStart(true),
+        }, busy === "start-lan" ? "启动中…" : "开启门户（只内网）")
       : null,
-    h("button", {
-      style: styles.primary, type: "button",
-      disabled: !!busy || running,
-      onClick: doStart,
-    }, busy === "start" ? "启动中…" : (running ? "运行中" : "开启门户")),
-    h("button", {
-      style: styles.danger, type: "button",
-      disabled: !!busy || !running,
-      onClick: doStop,
-    }, busy === "stop" ? "停止中…" : "关闭"),
+    !running
+      ? h("button", {
+          style: styles.primary, type: "button", disabled: !!busy,
+          onClick: () => doStart(false),
+        }, busy === "start" ? "启动中…" : "开启门户（内网 + 公网）")
+      : null,
     h("button", { style: styles.btn, type: "button", onClick: load }, "刷新"),
   ));
 
-  // 警示（口令的后果必须讲清楚）
+  // 警示
   children.push(h("div", { key: "warn", style: styles.warn },
-    "⚠ 开启后本机服务可从外网访问：拿到口令的人可以启停被开放的服务。" +
-    (running && status && status.passwordMode === "fixed"
-      ? "当前用的是固定口令：多次开启口令不变，一旦泄漏就是长期有效。"
-      : (status && status.kind === "portal"
-          ? "内网访问免密；外网访问必须口令。"
-          : "口令每次开启都会更新。")) +
-    "不用时请点「关闭」。"
+    "⚠ 公网开启后，拿到口令的人可以启停你开放的服务。" +
+    (lanAuth === false
+      ? "局域网免密：仅建议在可信网络下使用。"
+      : "局域网也要口令。") +
+    "不用时请点「关闭公网」。"
   ));
 
   if (error) {
@@ -416,7 +575,8 @@ function ServicePortalSettingsTab() {
   if (output && output.stdout && !running) {
     children.push(h("div", { key: "out", style: styles.block },
       h("div", { style: styles.muted }, "启动器输出"),
-      h("pre", { style: Object.assign({}, styles.code, { whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto" }) },
+      h("pre", { style: Object.assign({}, styles.code,
+        { whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto" }) },
         String(output.stdout).slice(-1200)),
     ));
   }

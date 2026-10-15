@@ -104,6 +104,47 @@ def main():
     check("未启用服务有明确的禁用标记",
           "aria-disabled" in html2 or "不可访问" in html2)
 
+    # ---- 4. 局域网总开关（关掉后内网也要口令；本机不受影响）----
+    # 拦的 bug：总开关只改了界面状态、认证层没变 —— 用户以为关了，实际还能进。
+    print("[局域网访问总开关]")
+
+    def needs_auth(lan_enabled, lan_auth, host="192.168.1.5:8899"):
+        # 直接对认证判定函数取值：不经过 HTTP，专测「该不该要口令」这一个判断。
+        kind = portal_proxy.classify_host(host)
+        return portal_proxy.needs_auth(
+            kind,
+            open_classes_provider=(
+                lambda: ("loopback",) if lan_auth else ("loopback", "lan")),
+            lan_enabled_provider=lambda: lan_enabled,
+        )
+
+    check("局域网开关开着 + 免密 -> 内网不要口令",
+          needs_auth(True, False) is False)
+    check("局域网开关开着 + 要口令 -> 内网要口令",
+          needs_auth(True, True) is True)
+    check("局域网开关关掉 -> 内网必须要求口令（不是只改界面）",
+          needs_auth(False, False) is True)
+    check("局域网开关关掉 + 本机访问仍免密（否则电脑上自己都进不去）",
+          needs_auth(False, False, host="127.0.0.1:8899") is False)
+    check("局域网开关关掉不影响公网判定（公网照样要口令）",
+          needs_auth(False, False, host="x.trycloudflare.com") is True)
+
+    # provider 抛异常必须收紧（fail-closed），绝不能因为出错就放行
+    def boom():
+        raise RuntimeError("boom")
+
+    check("局域网 provider 抛异常 -> 收紧到要口令（fail-closed）",
+          portal_proxy.needs_auth(
+              portal_proxy.classify_host("192.168.1.5:8899"),
+              lan_enabled_provider=boom) is True)
+    check("免密 provider 抛异常 -> 收紧到只免本机（fail-closed）",
+          (portal_proxy.needs_auth(
+              portal_proxy.classify_host("192.168.1.5:8899"),
+              open_classes_provider=boom) is True
+           and portal_proxy.needs_auth(
+              portal_proxy.classify_host("127.0.0.1:8899"),
+              open_classes_provider=boom) is False))
+
     print("")
     if failures:
         print("门户集成回归检验失败：%d 项" % len(failures))
