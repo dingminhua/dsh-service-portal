@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.1 (2026-10-15)
+
+用户报「无法开启公网访问」。查到的**根因是我在 0.5.0 加 autoStart 时引入的**：
+
+- **门户已在运行时，「开启公网访问」什么都不做。**
+  设置页按钮 → 宿主 `POST /start` → `startPublic` 里的幂等检查
+  `if (await portListening(port)) return { ok: true, already: true }` 直接返回，
+  **建隧道那一步被一起跳过了**。调用方拿到 ok=true 却永远等不到公网地址。
+  以前不显形的原因：门户以前不会自动起，第一次点按钮时端口没在听，会走完整
+  启动流程（含建隧道）；加了 autoStart 之后门户总是已经跑着，于是永远跳过隧道。
+  修：幂等分支区分 `lanOnly` —— 只开内网才直接返回；要公网则去拨隧道
+  （新增 `startTunnelOnly()`，走门户自己的 `/_api/tunnel/start`，
+  因为 cloudflared 子进程句柄与日志偏移量都在门户进程里）。
+
+- **「关闭公网」把整个门户停掉。** 语义错了：用户点它是想收起对外暴露，
+  不该顺带把内网二维码也弄失效。新增 `doStopTunnel()` → 宿主 `/tunnel/stop`
+  → 只收隧道，内网继续可用（实测：关公网后内网仍 HTTP 200）。
+
+### Tests
+
+- 新增 `tools/check_portal_tunnel.py`（11 项）：用**假门户**端到端验证宿主确实
+  会去调 `/_api/tunnel/start`、如实回报地址；含「隧道失败不谎报成功」的反例控制；
+  以及「关闭公网走 /tunnel/stop 而不是 /stop」的源码断言。
+- 新增 `test/test_public_link.py`（12 项）：**真实公网链路**验证 ——
+  自包含起门户 + 拨隧道，用 curl（`--noproxy` 绕过本机代理）验证域名可达、
+  公网首页是登录页、未登录访问 API 拿不到数据、未登录访问服务路径被拦、
+  本机/内网免密、畸形 Host fail-closed、cloudflared 已注册到边缘。
+  关键细节：只看状态码会误判（登录页也是 200），必须看**内容**；
+  刚建好的域名要等 DNS 生效，不能直接断言。
+
+### 说明：本机代理会影响公网自测
+
+本机开着 Clash/Mihomo（TUN 模式 + `HTTP_PROXY=127.0.0.1:7897`）时：
+cloudflared 日志会出现 `ICMP proxy will use 198.18.0.1 ... zone Mihomo`；
+PowerShell 的 `Invoke-WebRequest` 走系统代理去访问自己的公网域名会失败
+（`基础连接已经关闭`），而 `curl --noproxy '*'` 正常 200。
+**这是本机代理的干扰，不是门户故障。** dsh-pocket 的 README 也记录过同类现象
+（`公网 error 1033` → 多半是本机代理/VPN 掐断隧道）。
 ## 0.6.0 (2026-10-15)
 
 用户反馈「体验距离参考对象还差很多」。这次做了系统性对照（逐段读 dsh-pocket 的

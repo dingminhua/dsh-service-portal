@@ -206,6 +206,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
+| `tools/check_portal_tunnel.py` | 11 | **门户已在跑时「开启公网访问」什么都不做**（幂等检查把建隧道也跳过了）、「关闭公网」把整个门户停掉 |
 | `tools/check_portal_bind.py` | 7 | **只绑 127.0.0.1**（手机永远连不上）、Windows `SO_REUSEADDR` 重复绑定（流量随机分流）、端口被占不换端口 |
 | `tools/check_portal_websocket.py` | 8 | 升级头被过滤（握手失败）、101 响应没原样回传、握手后没有双向管道（实时数据不刷新） |
 | `tools/check_portal_integration.py` | — | **畸形 Host 被判成内网**（`garbage value` 竟免密）、控制台链接双斜杠、局域网总开关只改界面不改认证 |
@@ -226,6 +227,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `test/test_lan_address.py` | 16 | **网卡评分选地址**（物理网卡优先、198.18.x 降权）、手动选地址立即生效、非法地址被拒、覆盖值落盘 |
 | `test/test_lan_toggle.py` | 10 | 内网口令开关**立即生效**（不重启门户）、本机永远免密、公网不受影响 |
 | `test/test_lan_switch.py` | 6 | 局域网访问总开关：关掉后内网要求口令、本机不受影响、重开恢复 |
+| `test/test_public_link.py` | 12 | **真实公网链路**：域名可达、公网首页是登录页、未登录拿不到 API 数据、内网免密、畸形 Host fail-closed |
 | `test/test_settings_data.py` | 10 | 设置页数据链：状态字段、二维码生成、二维码只给本门户地址（防图床） |
 | `test/test_host_buttons.py` | 8 | **走插件宿主 API**（设置页按钮真正调用的路径）：开启→状态→重复开启→停止 |
 

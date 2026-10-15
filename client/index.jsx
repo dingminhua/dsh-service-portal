@@ -333,6 +333,21 @@ function ServicePortalSettingsTab() {
     } finally { setBusy(""); }
   };
 
+  // 关闭公网：**只关隧道**，内网访问继续可用。
+  // 早先这里调 doStop（停掉整个门户）—— 语义错了：用户点「关闭公网」是想收起
+  // 对外暴露，不该顺带把内网的二维码也弄失效。
+  const doStopTunnel = async () => {
+    setBusy("tunnel-stop"); setError(null);
+    try {
+      const r = await request("/tunnel/stop", "POST", {});
+      if (!r || r.ok !== true) throw new Error((r && (r.error || r.detail)) || "关闭失败");
+      showToast("已关闭公网访问");
+      await load();
+    } catch (e) {
+      setError(String(e && e.message ? e.message : e));
+    } finally { setBusy(""); }
+  };
+
   const doStop = async () => {
     setBusy("stop"); setError(null);
     try {
@@ -513,8 +528,8 @@ function ServicePortalSettingsTab() {
     h("div", { style: styles.sectionTitle, marginBottom: 0 }, "公网访问"),
     publicUrl
       ? h("button", { style: styles.danger, type: "button",
-                      disabled: !!busy, onClick: doStop },
-          busy === "stop" ? "关闭中…" : "关闭公网")
+                      disabled: !!busy, onClick: doStopTunnel },
+          busy === "tunnel-stop" ? "关闭中…" : "关闭公网")
       : h("button", {
           style: styles.primary, type: "button",
           disabled: !!busy || !running,
