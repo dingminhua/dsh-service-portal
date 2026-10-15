@@ -30,7 +30,7 @@
 
 ### DSH 插件：`dsh-poker-viewer`（2026-10-15）
 
-位置 `D:\DshProject\dsh-poker-viewer\plugin`，以 DSH 的 **link 本地插件**方式安装
+位置 `D:\DshProject\dsh-service-portal\services\poker-viewer`，以 DSH 的 **link 本地插件**方式安装
 （与 `dsh-ldvh` 同类）。它在设置页提供「扑克外网入口」一节：一键开启/关闭、
 显示连接地址与口令。
 
@@ -39,7 +39,7 @@
 
 ```powershell
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
-& $dsh plugin --profile desktop add "link:D:/DshProject/dsh-poker-viewer/plugin"
+& $dsh plugin --profile desktop add "link:D:/DshProject/dsh-service-portal/services/poker-viewer"
 # 装完需要重启 DSH（插件在宿主进程里加载）
 ```
 

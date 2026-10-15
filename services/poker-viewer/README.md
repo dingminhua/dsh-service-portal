@@ -25,7 +25,7 @@ ld-rl-poker **训练配置台**与**模型查看台**的外网开关（DSH 插�
 
 ```powershell
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
-& $dsh plugin --profile desktop add "link:D:/DshProject/dsh-poker-viewer/plugin"
+& $dsh plugin --profile desktop add "link:D:/DshProject/dsh-service-portal/services/poker-viewer"
 ```
 
 装完**需要重启 DSH**（插件在宿主进程里加载）。已确认它出现在 profile 的
