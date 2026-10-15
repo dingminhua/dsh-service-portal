@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>草稿 B · 插件设置页（全页梳理）</title>
+<style>
+  /* 本稿只示范**排版与分组**，颜色刻意贴近 DSH 主题令牌，便于对照真机观感 */
+  :root{
+    --bg:#111318; --panel:#171a21; --card:#1c2029; --card-2:#21262f;
+    --border:#2a3039; --text:#e8eaee; --text-2:#99a1af; --text-3:#6d7684;
+    --brand:#4f6ef7; --ok:#3fb950; --warn:#d9a441; --danger:#f2604f;
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+    --r:10px; --r-lg:14px;
+  }
+  [data-theme="light"]{
+    --bg:#eef1f5; --panel:#fff; --card:#fff; --card-2:#f6f8fb;
+    --border:#e2e7ee; --text:#151a22; --text-2:#5a6473; --text-3:#8b95a5;
+  }
+  *{box-sizing:border-box}
+  html,body{overflow-x:hidden}
+  body{margin:0;background:var(--bg);color:var(--text);
+    overflow-wrap:anywhere;
+    font:14px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif}
+
+  /* 模拟 DSH 设置面板的容器：草稿故意给出**更宽**的版心，用来对比"被 560px 卡住" */
+  .frame{max-width:900px;margin:0 auto;padding:var(--s5) var(--s4) 72px}
+  .frame-narrow{max-width:560px}
+  .toggle-narrow{position:fixed;right:14px;bottom:14px;z-index:9;display:flex;gap:6px}
+  .toggle-narrow button{font:inherit;font-size:12.5px;cursor:pointer;
+    background:var(--card);color:var(--text);border:1px solid var(--border);
+    border-radius:999px;padding:8px 12px;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+
+  /* ---- 页头（吸顶：滚动时仍知道"现在什么状态"）---- */
+  .head{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--border);
+    margin:calc(-1 * var(--s5)) calc(-1 * var(--s4)) var(--s5);
+    padding:var(--s4) var(--s4) var(--s3)}
+  .head-top{display:flex;align-items:center;gap:var(--s3)}
+  .logo{width:30px;height:30px;border-radius:8px;flex:0 0 auto;
+    background:linear-gradient(135deg,#5b7cfa,#7c5bfa)}
+  .head h1{font-size:16px;margin:0;font-weight:600;letter-spacing:-.01em}
+  .head .sub{font-size:12.5px;color:var(--text-2);margin:1px 0 0}
+  .head .star{margin-left:auto;font-size:12.5px;color:var(--text-2);
+    text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
+  .chips{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3)}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;
+    color:var(--text-2);background:var(--card);border:1px solid var(--border);
+    border-radius:999px;padding:3px 10px}
+  .chip b{color:var(--text);font-weight:600}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+  .dot.off{background:var(--text-3)}
+
+  /* ---- 分组卡片 ---- */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);
+    padding:var(--s4);margin-bottom:var(--s4)}
+  .card-2{background:var(--card-2)}
+  .card h2{font-size:13px;margin:0 0 var(--s3);color:var(--text-2);font-weight:600;
+    letter-spacing:.03em;text-transform:none}
+  .card h2 .idx{color:var(--text-3);font-weight:500;margin-right:6px}
+  .rowhead{display:flex;align-items:center;justify-content:space-between;
+    gap:var(--s3);flex-wrap:wrap;margin-bottom:var(--s3)}
+  .rowhead h2{margin:0}
+
+  /* 两栏：宽屏才分栏，窄屏自动单栏 */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4);align-items:start}
+  @media (max-width:760px){.cols{grid-template-columns:1fr}}
+  .narrow .cols{grid-template-columns:1fr}
+
+  /* ---- 分享卡（二维码 + 地址）---- */
+  .share{display:flex;gap:var(--s4);align-items:flex-start;flex-wrap:wrap}
+  img.qr{width:132px;height:132px;image-rendering:pixelated;background:#fff;
+    padding:5px;border-radius:var(--r);border:1px solid var(--border);flex:0 0 auto}
+  .share-main{flex:1;min-width:180px}
+  .urlbox{display:flex;align-items:center;gap:var(--s2);background:var(--card-2);
+    border:1px solid var(--border);border-radius:var(--r);padding:7px 9px}
+  .urlbox code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;flex:1}
+  .hint{font-size:12.5px;color:var(--text-3);margin:var(--s2) 0 0}
+  details{margin-top:var(--s3)}
+  summary{cursor:pointer;font-size:12.5px;color:var(--text-2);list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ "}
+  details[open] summary::before{content:"▾ "}
+  details .urlbox{margin-top:var(--s2)}
+
+  /* ---- 设置行：左说明 / 右开关 ---- */
+  .srow{display:flex;align-items:flex-start;gap:var(--s3);
+    justify-content:space-between;padding:var(--s3) 0;border-top:1px solid var(--border)}
+  .srow:first-of-type{border-top:none;padding-top:0}
+  .srow .t{font-size:13.5px;font-weight:500}
+  .srow .d{font-size:12.5px;color:var(--text-2);margin-top:2px}
+  .srow .ctl{flex:0 0 auto}
+  .sw{position:relative;width:42px;height:24px;border-radius:999px;border:none;
+    background:var(--ok);cursor:pointer;padding:0;flex:0 0 auto}
+  .sw.off{background:var(--border)}
+  .sw i{position:absolute;top:3px;left:21px;width:18px;height:18px;border-radius:50%;
+    background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+  .sw.off i{left:3px}
+
+  /* ---- 按钮：一处只留一个主线动作 ---- */
+  button,.btn{font:inherit;cursor:pointer;border-radius:999px;padding:8px 14px;
+    font-size:13px;min-height:34px;display:inline-flex;align-items:center;gap:6px;
+    border:1px solid var(--border);background:transparent;color:var(--text);
+    text-decoration:none}
+  .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:500}
+  .btn.solid{background:var(--card-2)}
+  .btn.danger{color:var(--danger);
+    border-color:color-mix(in srgb,var(--danger) 45%,var(--border))}
+  .actions{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-top:var(--s3)}
+
+  input,select{width:100%;padding:9px 11px;font-size:14px;border-radius:var(--r);
+    border:1px solid var(--border);background:var(--card-2);color:var(--text)}
+  input:focus,select:focus{outline:none;border-color:var(--brand);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 20%,transparent)}
+  .field{margin-top:var(--s3)}
+  .field label{display:block;font-size:12.5px;color:var(--text-2);margin-bottom:var(--s1)}
+  .inline{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+
+  /* ---- 提示块 ---- */
+  .note{border-left:3px solid var(--warn);background:var(--card-2);border-radius:var(--r);
+    padding:10px 12px;font-size:12.5px;color:var(--text-2);margin-top:var(--s3)}
+  .note b{color:var(--warn);font-weight:600}
+  .note.danger{border-left-color:var(--danger)} .note.danger b{color:var(--danger)}
+
+  /* ---- 评审标注 ---- */
+  .annot{border:1px dashed color-mix(in srgb,var(--brand) 55%,transparent);
+    border-radius:var(--r-lg);padding:var(--s4);margin-top:var(--s5);
+    background:color-mix(in srgb,var(--brand) 8%,transparent)}
+  .annot h3{font-size:13px;margin:0 0 var(--s2);color:var(--brand)}
+  .annot ol{margin:0;padding-left:20px;font-size:12.5px;color:var(--text-2)}
+  .annot li{margin:5px 0}
+  .annot code{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;
+    border:1px solid var(--border);color:var(--text-2);margin-left:6px}
+</style>
+</head>
+<body>
+<div class="frame" id="frame">
+  <!-- 吸顶页头 -->
+  <div class="head">
+    <div class="head-top">
+      <div class="logo"></div>
+      <div>
+        <h1>对外服务门户</h1>
+        <p class="sub">把你本机的服务对外开放，并统一管理</p>
+      </div>
+      <a class="star" href="#">鼓励一下 ★</a>
+    </div>
+    <div class="chips">
+      <span class="chip"><span class="dot ok"></span><b>运行中</b></span>
+      <span class="chip">端口 <b>8899</b></span>
+      <span class="chip">局域网 <b>免密</b></span>
+      <span class="chip">公网 <b>已开启</b></span>
+      <span class="chip">服务 <b>3 个</b></span>
+    </div>
+  </div>
+
+  <!-- ① 手机访问：局域网 + 公网并排（宽屏），窄屏自动上下 -->
+  <div class="cols">
+    <section class="card">
+      <div class="rowhead">
+        <h2>局域网访问</h2>
+        <button class="sw" title="局域网总开关"><i></i></button>
+      </div>
+      <div class="share">
+        <img class="qr" alt="局域网二维码" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMzIiIGhlaWdodD0iMTMyIj48cmVjdCB3aWR0aD0iMTMyIiBoZWlnaHQ9IjEzMiIgZmlsbD0iI2ZmZiIvPjxyZWN0IHg9IjgiIHk9IjgiIHdpZHRoPSIzNiIgaGVpZ2h0PSIzNiIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9Ijg4IiB5PSI4IiB3aWR0aD0iMzYiIGhlaWdodD0iMzYiIGZpbGw9IiMwMDAiLz48cmVjdCB4PSI4IiB5PSI4OCIgd2lkdGg9IjM2IiBoZWlnaHQ9IjM2IiBmaWxsPSIjMDAwIi8+PHJlY3QgeD0iNTIiIHk9IjUyIiB3aWR0aD0iMjgiIGhlaWdodD0iMjgiIGZpbGw9IiMwMDAiLz48L3N2Zz4=">
+        <div class="share-main">
+          <div class="urlbox"><code>http://192.168.71.10:8899</code>
+            <button class="btn">复制</button></div>
+          <p class="hint">手机连同一个 WiFi 后扫码即可打开</p>
+          <details><summary>还有 2 个内网地址</summary>
+            <div class="urlbox"><code>http://10.198.75.60:8899</code>
+              <button class="btn">复制</button></div>
+            <div class="urlbox"><code>http://198.18.0.1:8899</code>
+              <button class="btn">复制</button></div>
+          </details>
+        </div>
+      </div>
+      <div class="srow" style="margin-top:var(--s4)">
+        <div><div class="t">局域网访问密码</div>
+          <div class="d">已关闭：同一 WiFi 扫码直连（公网仍要口令）</div></div>
+        <button class="sw off"><i></i></button>
+      </div>
+      <details style="margin-top:0">
+        <summary>高级 · 手动选地址</summary>
+        <div class="field">
+          <label>局域网地址</label>
+          <select><option>自动（推荐）</option><option>192.168.71.10</option>
+            <option>10.198.75.60</option><option>198.18.0.1</option></select>
+          <p class="hint">自动会按网卡性质评分：物理网卡优先，VPN / 虚拟网卡排后。选错了手机就连不上。</p>
+        </div>
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="rowhead">
+        <h2>公网访问</h2>
+        <button class="btn danger">关闭公网</button>
+      </div>
+      <div class="share">
+        <img class="qr" alt="公网二维码" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMzIiIGhlaWdodD0iMTMyIj48cmVjdCB3aWR0aD0iMTMyIiBoZWlnaHQ9IjEzMiIgZmlsbD0iI2ZmZiIvPjxyZWN0IHg9IjgiIHk9IjgiIHdpZHRoPSIzNiIgaGVpZ2h0PSIzNiIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9Ijg4IiB5PSI4IiB3aWR0aD0iMzYiIGhlaWdodD0iMzYiIGZpbGw9IiMwMDAiLz48cmVjdCB4PSI4IiB5PSI4OCIgd2lkdGg9IjM2IiBoZWlnaHQ9IjM2IiBmaWxsPSIjMDAwIi8+PHJlY3QgeD0iNDQiIHk9IjQ0IiB3aWR0aD0iNDQiIGhlaWdodD0iNDQiIGZpbGw9IiMwMDAiLz48L3N2Zz4=">
+        <div class="share-main">
+          <div class="urlbox"><code>https://demo-route.trycloudflare.com</code>
+            <button class="btn">复制</button></div>
+          <p class="hint">任何网络都能打开，需要口令</p>
+        </div>
+      </div>
+      <div class="srow" style="margin-top:var(--s4)">
+        <div><div class="t">公网访问密码</div>
+          <div class="d">本次随机：每次开启都会换新</div></div>
+        <span class="chip">本次随机</span>
+      </div>
+      <div class="inline">
+        <code style="flex:1;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;
+          background:var(--card-2);border:1px solid var(--border);border-radius:var(--r);
+          padding:8px 10px">5c9mIW0w-7T3j1Nz</code>
+        <button class="btn">隐藏</button><button class="btn">复制</button>
+      </div>
+      <div class="actions">
+        <button class="btn solid">自定义</button>
+      </div>
+      <div class="note">
+        <b>公网暴露风险</b><br>
+        地址是随机域名，每次开启都会变、关闭或重启后失效，并可能被他人复用为陌生网站 ——
+        请勿收藏，每次扫「当前」二维码。拿到口令的人可以启停你开放的服务，不用时请点「关闭公网」。
+      </div>
+    </section>
+  </div>
+
+  <!-- ② 服务清单：直接嵌进设置页（用户诉求：管理服务放这里，不要另开控制台页） -->
+  <section class="card">
+    <div class="rowhead">
+      <h2>开放中的服务</h2>
+      <span class="chip">3 个 · <b style="color:var(--warn)">2 个上游未响应</b></span>
+    </div>
+
+    <div class="card card-2" style="margin-bottom:var(--s3)">
+      <div class="inline" style="justify-content:space-between">
+        <div class="inline">
+          <strong style="font-size:14px">RL配置训练台</strong>
+          <code style="font-family:ui-monospace,Menlo,monospace;font-size:12px;
+            color:var(--text-2)">/rltrain</code>
+        </div>
+        <span class="chip"><span class="dot ok"></span>运行中</span>
+      </div>
+      <p class="hint" style="margin-top:var(--s2)">上游 127.0.0.1:8810</p>
+      <div class="actions">
+        <a class="btn primary" href="#">访问</a>
+        <button class="btn">关闭</button>
+        <button class="btn">编辑</button>
+        <button class="btn danger">删除</button>
+      </div>
+    </div>
+
+    <div class="card card-2" style="margin-bottom:var(--s3)">
+      <div class="inline" style="justify-content:space-between">
+        <div class="inline">
+          <strong style="font-size:14px">真实应用</strong>
+          <code style="font-family:ui-monospace,Menlo,monospace;font-size:12px;
+            color:var(--text-2)">/realapp</code>
+        </div>
+        <span class="chip" style="color:var(--warn)"><span class="dot warn"></span>上游未响应</span>
+      </div>
+      <p class="hint" style="margin-top:var(--s2)">上游 127.0.0.1:2460 · 点「访问」会失败，请先启动这个程序</p>
+      <div class="actions">
+        <a class="btn primary" href="#">访问</a>
+        <button class="btn">关闭</button>
+        <button class="btn">编辑</button>
+        <button class="btn danger">删除</button>
+      </div>
+    </div>
+
+    <details>
+      <summary style="font-size:13.5px;color:var(--text)">＋ 添加服务</summary>
+      <div class="cols" style="gap:var(--s3);margin-top:var(--s3)">
+        <div class="field" style="margin-top:0"><label>名称（必填）</label>
+          <input placeholder="例如：训练配置台"></div>
+        <div class="field" style="margin-top:0"><label>路由路径（以 / 开头）</label>
+          <input placeholder="/train"></div>
+        <div class="field" style="margin-top:0"><label>上游地址</label>
+          <input placeholder="127.0.0.1:8810"></div>
+        <div class="field" style="margin-top:0"><label>备注（可选）</label>
+          <input placeholder="给自己看的说明"></div>
+      </div>
+      <div class="actions"><button class="btn primary">添加服务</button></div>
+    </details>
+  </section>
+
+  <!-- ③ 门户进程：危险动作单独一块，不再和上面内容混排 -->
+  <section class="card">
+    <h2>门户进程</h2>
+    <div class="inline" style="justify-content:space-between">
+      <div>
+        <div class="t" style="font-size:13.5px">门户正在运行（端口 8899）</div>
+        <div class="hint" style="margin-top:2px">停止后内网 / 公网地址都会失效，设置与口令保留</div>
+      </div>
+      <div class="actions" style="margin-top:0">
+        <button class="btn danger">停止门户</button>
+        <button class="btn">刷新</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="annot">
+    <h3>本稿相对现状改了什么（设置页）</h3>
+    <ol>
+      <li><b>版心从固定 560px 放开</b>：宽屏改两栏（局域网 / 公网并排），
+          窄屏自动回落单栏。右下角按钮可在「宽版 / 窄版」间切换对比。</li>
+      <li><b>页头吸顶</b>：滚动到页面中段时仍能看到"运行中 / 端口 / 公网是否开着"。
+          原来只有页面最顶部一行小字，滚下去就看不见了。</li>
+      <li><b>状态改为一排 chip</b>：运行中 · 端口 · 局域网是否免密 · 公网是否开启 · 服务数 ——
+          一眼看完，不用在一段文字里找。</li>
+      <li><b>服务管理搬进设置页</b>（你的原话："管理可使用的服务放在现在的设置里面"）：
+          服务卡片直接列在这里，不再是"点「打开控制台」跳到另一个页面"。</li>
+      <li><b>二维码从 176px 收到 132px</b>：原来两个大二维码把首屏占满，
+          服务清单被挤到很下面；扫码并不需要那么大。</li>
+      <li><b>多个内网地址收进「还有 N 个」</b>：主地址 + 二维码首屏可见，
+          其余地址展开再看（原来 3~4 个地址框铺满一屏）。</li>
+      <li><b>按钮分出层级</b>：服务卡里「访问」是主线（实心），关闭/编辑为次级，
+          删除用危险色；不再四个按钮同权重。</li>
+      <li><b>「门户进程」独立成块</b>：停止/刷新是"对进程"的操作，
+          与"对服务"的操作分开，不再和内容混在一行。</li>
+      <li><b>警示统一为左侧色条块</b>：公网风险归到公网区块内（用户在那儿操作），
+          不再有页面底部孤立的黄字段落。</li>
+      <li><b>说明文字一律在按钮下方</b>，不与按钮同行（上一轮已改，本稿延续）。</li>
+    </ol>
+  </div>
+</div>
+
+<div class="toggle-narrow">
+  <button onclick="var f=document.getElementById('frame');f.classList.toggle('narrow');this.textContent=f.classList.contains('narrow')?'看宽版（推荐）':'看窄版（现状 560px）'">看窄版（现状 560px）</button>
+  <button onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">深浅色</button>
+</div>
+</body>
+</html>

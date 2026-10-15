@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>草稿 A · 手机控制台（对外服务门户）</title>
+<style>
+  /* ---- 令牌：只在这里定义，组件不写死颜色 ---- */
+  :root{
+    --bg:#0b0d12; --surface:#151922; --surface-2:#1b2029; --border:#262c38;
+    --text:#e9ecf1; --text-2:#98a1b0; --text-3:#6b7280;
+    --brand:#4f6ef7; --brand-fg:#fff;
+    --ok:#3fb950; --warn:#d9a441; --danger:#f2604f; --idle:#6b7280;
+    --r-sm:8px; --r-md:12px; --r-lg:16px;
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  }
+  [data-theme="light"]{
+    --bg:#f4f6f9; --surface:#fff; --surface-2:#f7f9fc; --border:#e3e7ee;
+    --text:#141922; --text-2:#5b6577; --text-3:#8b95a5;
+  }
+  *{box-sizing:border-box}
+  /* 防横向溢出：长 URL / 长代码串在窄屏必须能断，否则整页被撑宽、
+     右侧内容被裁掉（草稿第一版就踩了这个 —— 状态徽章在右边被切掉半截）。 */
+  html,body{overflow-x:hidden}
+  body{margin:0;background:var(--bg);color:var(--text);line-height:1.55;
+    overflow-wrap:anywhere;
+    font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
+    -webkit-text-size-adjust:100%}
+  /* flex 子项默认 min-width:auto，会被内容顶宽 —— 统一放开收缩 */
+  .card *,.statusbar *{min-width:0}
+  .wrap{max-width:600px;margin:0 auto;padding:var(--s5) var(--s4) 64px}
+
+  /* ---------- 页头 ---------- */
+  header{display:flex;align-items:flex-start;gap:var(--s3);margin-bottom:var(--s4)}
+  .logo{width:34px;height:34px;border-radius:9px;flex:0 0 auto;
+    background:linear-gradient(135deg,#5b7cfa,#7c5bfa)}
+  h1{font-size:19px;margin:0;letter-spacing:-.01em}
+  .sub{color:var(--text-2);font-size:13px;margin:2px 0 0}
+
+  /* ---------- 状态条：一眼看到"现在什么状况" ---------- */
+  .statusbar{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+    padding:10px 14px;margin-bottom:var(--s5)}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:13px;
+    color:var(--text-2)}
+  .chip b{color:var(--text);font-weight:600}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+  .dot.off{background:var(--idle)} .dot.dead{background:var(--danger)}
+
+  /* ---------- 卡片 ---------- */
+  .card{background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--r-lg);padding:var(--s4);margin-bottom:var(--s4)}
+  .card > h2{font-size:14px;margin:0 0 var(--s3);color:var(--text-2);
+    font-weight:600;letter-spacing:.02em}
+  .rowhead{display:flex;align-items:center;justify-content:space-between;
+    gap:var(--s3);margin-bottom:var(--s3)}
+  .rowhead h2{margin:0}
+
+  /* ---------- 分享区：二维码 + 地址 ---------- */
+  .share{display:flex;gap:var(--s4);align-items:center;flex-wrap:wrap}
+  img.qr{width:148px;height:148px;image-rendering:pixelated;background:#fff;
+    padding:6px;border-radius:var(--r-md);border:1px solid var(--border);flex:0 0 auto}
+  .share-main{flex:1;min-width:190px}
+  .urlbox{display:flex;align-items:center;gap:var(--s2);
+    background:var(--surface-2);border:1px solid var(--border);
+    border-radius:var(--r-sm);padding:8px 10px}
+  .urlbox code{font-family:ui-monospace,Menlo,monospace;font-size:13px;
+    word-break:break-all;flex:1}
+  .more{margin-top:var(--s3)}
+  summary{cursor:pointer;color:var(--text-2);font-size:13px;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ ";transition:.15s}
+  details[open] summary::before{content:"▾ "}
+  .more .urlbox{margin-top:var(--s2)}
+
+  /* ---------- 按钮 ---------- */
+  button,.btn{font:inherit;cursor:pointer;border-radius:var(--r-sm);
+    border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+    padding:9px 13px;font-size:13.5px;display:inline-flex;align-items:center;
+    gap:6px;text-decoration:none;min-height:40px}
+  .btn.primary{background:var(--brand);border-color:var(--brand);color:var(--brand-fg);
+    font-weight:500}
+  .btn.ghost{background:transparent}
+  .btn.danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,var(--border))}
+  .iconbtn{min-width:40px;justify-content:center;padding:9px 11px}
+  .actions{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
+
+  /* ---------- 服务卡 ---------- */
+  .svc{background:var(--surface-2);border:1px solid var(--border);
+    border-radius:var(--r-md);padding:var(--s3) var(--s3) var(--s3);
+    margin-bottom:var(--s3)}
+  .svc:last-child{margin-bottom:0}
+  .svc-top{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}
+  .svc-name{font-size:15px;font-weight:600;margin:0}
+  .mount{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;
+    color:var(--text-2);background:var(--bg);border:1px solid var(--border);
+    border-radius:6px;padding:1px 7px}
+  .state{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;
+    color:var(--text-2);margin-left:auto;white-space:nowrap}
+  .meta{font-size:12.5px;color:var(--text-2);margin:6px 0 0}
+  .meta code{font-family:ui-monospace,Menlo,monospace}
+  .svc .actions{margin-top:var(--s3)}
+
+  /* ---------- 提示块 ---------- */
+  .note{border-left:3px solid var(--warn);background:var(--surface-2);
+    border-radius:var(--r-sm);padding:9px 12px;font-size:13px;color:var(--text-2);
+    margin-top:var(--s3)}
+  .note b{color:var(--warn);font-weight:600}
+  .hint{font-size:12.5px;color:var(--text-3);margin:var(--s2) 0 0}
+
+  /* ---------- 表单 ---------- */
+  label{display:block;font-size:12.5px;color:var(--text-2);margin:var(--s3) 0 var(--s1)}
+  input,select{width:100%;padding:11px 12px;font-size:15px;border-radius:var(--r-sm);
+    border:1px solid var(--border);background:var(--surface-2);color:var(--text)}
+  input:focus,select:focus{outline:none;border-color:var(--brand);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 22%,transparent)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3)}
+  @media (max-width:460px){.two{grid-template-columns:1fr}}
+
+  /* ---------- 评审标注（本稿专用，不进产品） ---------- */
+  .annot{border:1px dashed color-mix(in srgb,var(--brand) 55%,transparent);
+    border-radius:var(--r-md);padding:var(--s3) var(--s4);margin:var(--s5) 0 0;
+    background:color-mix(in srgb,var(--brand) 8%,transparent)}
+  .annot h3{font-size:13px;margin:0 0 var(--s2);color:var(--brand)}
+  .annot ul{margin:0;padding-left:18px;font-size:12.5px;color:var(--text-2)}
+  .annot li{margin:3px 0}
+  .annot code{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .toolbar{position:fixed;right:14px;bottom:14px;display:flex;gap:6px;z-index:9}
+  .toolbar button{background:var(--surface);border:1px solid var(--border);
+    font-size:12.5px;padding:8px 11px;min-height:auto;border-radius:999px;
+    box-shadow:0 4px 16px rgba(0,0,0,.25)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo" aria-hidden="true"></div>
+    <div>
+      <h1>对外服务门户</h1>
+      <p class="sub">管理要对外开放的服务</p>
+    </div>
+  </header>
+
+  <!-- 状态条：现状是一行小灰字，混在标题下面；草稿提成独立条，一眼看到全局 -->
+  <div class="statusbar">
+    <span class="chip"><span class="dot ok"></span><b>运行中</b></span>
+    <span class="chip">端口 <b>8899</b></span>
+    <span class="chip">内网 <b>3 个地址</b></span>
+    <span class="chip">公网 <b>已开启</b></span>
+  </div>
+
+  <!-- ============ 分享 ============ -->
+  <section class="card">
+    <div class="rowhead">
+      <h2>手机扫码打开</h2>
+      <span class="chip"><span class="dot ok"></span>局域网免密</span>
+    </div>
+    <div class="share">
+      <img class="qr" alt="局域网二维码" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNDgiIGhlaWdodD0iMTQ4Ij48cmVjdCB3aWR0aD0iMTQ4IiBoZWlnaHQ9IjE0OCIgZmlsbD0iI2ZmZiIvPjxyZWN0IHg9IjgiIHk9IjgiIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9IjEwMCIgeT0iOCIgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiBmaWxsPSIjMDAwIi8+PHJlY3QgeD0iOCIgeT0iMTAwIiB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIGZpbGw9IiMwMDAiLz48cmVjdCB4PSI2MCIgeT0iNjAiIHdpZHRoPSIyOCIgaGVpZ2h0PSIyOCIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9IjYwIiB5PSI4IiB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIGZpbGw9IiMwMDAiLz48cmVjdCB4PSI4IiB5PSI2MCIgd2lkdGg9IjEyIiBoZWlnaHQ9IjEyIiBmaWxsPSIjMDAwIi8+PC9zdmc+">
+      <div class="share-main">
+        <div class="urlbox">
+          <code>http://192.168.71.10:8899</code>
+          <button class="btn ghost iconbtn" title="复制">复制</button>
+        </div>
+        <p class="hint">手机连同一个 WiFi 后扫码即可打开</p>
+        <details class="more">
+          <summary>还有 2 个内网地址</summary>
+          <div class="urlbox"><code>http://10.198.75.60:8899</code>
+            <button class="btn ghost iconbtn">复制</button></div>
+          <div class="urlbox"><code>http://198.18.0.1:8899</code>
+            <button class="btn ghost iconbtn">复制</button></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 公网 ============ -->
+  <section class="card">
+    <div class="rowhead">
+      <h2>公网访问</h2>
+      <span class="chip"><span class="dot ok"></span>已开启</span>
+    </div>
+    <div class="share">
+      <img class="qr" alt="公网二维码" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNDgiIGhlaWdodD0iMTQ4Ij48cmVjdCB3aWR0aD0iMTQ4IiBoZWlnaHQ9IjE0OCIgZmlsbD0iI2ZmZiIvPjxyZWN0IHg9IjgiIHk9IjgiIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9IjEwMCIgeT0iOCIgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiBmaWxsPSIjMDAwIi8+PHJlY3QgeD0iOCIgeT0iMTAwIiB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIGZpbGw9IiMwMDAiLz48cmVjdCB4PSI1MiIgeT0iNTIiIHdpZHRoPSIzNiIgaGVpZ2h0PSIzNiIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9IjYwIiB5PSI4IiB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIGZpbGw9IiMwMDAiLz48cmVjdCB4PSI4IiB5PSI2MCIgd2lkdGg9IjEyIiBoZWlnaHQ9IjEyIiBmaWxsPSIjMDAwIi8+PC9zdmc+">
+      <div class="share-main">
+        <div class="urlbox">
+          <code>https://demo-route.trycloudflare.com</code>
+          <button class="btn ghost iconbtn">复制</button>
+        </div>
+        <p class="hint">任何网络都能打开，需要口令</p>
+
+        <label>公网访问密码</label>
+        <div class="urlbox">
+          <code>5c9mIW0w-7T3j1Nz</code>
+          <button class="btn ghost iconbtn">隐藏</button>
+          <button class="btn ghost iconbtn">复制</button>
+        </div>
+        <div class="actions" style="margin-top:8px">
+          <button class="btn">自定义</button>
+          <button class="btn">换回随机</button>
+          <span class="hint" style="margin:0">本次随机（每次开启都会换新）</span>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      <b>公网暴露风险</b><br>
+      地址是随机域名，每次开启都会变、关闭或重启后失效，并可能被他人复用为陌生网站 ——
+      请勿收藏，每次从本页扫「当前」二维码。拿到口令的人可以启停你开放的服务，
+      不用时请点上方「关闭公网」。
+    </div>
+  </section>
+
+  <!-- ============ 服务 ============ -->
+  <section class="card">
+    <div class="rowhead">
+      <h2>开放中的服务</h2>
+      <span class="chip">3 个 · <b style="color:var(--warn)">1 个上游未响应</b></span>
+    </div>
+
+    <div class="svc">
+      <div class="svc-top">
+        <h3 class="svc-name">RL配置训练台</h3>
+        <span class="mount">/rltrain</span>
+        <span class="state"><span class="dot ok"></span>已启用</span>
+      </div>
+      <p class="meta">上游 <code>127.0.0.1:8810</code></p>
+      <div class="actions">
+        <a class="btn primary" href="#">访问</a>
+        <button class="btn">关闭</button>
+        <button class="btn">编辑</button>
+        <button class="btn danger">删除</button>
+      </div>
+    </div>
+
+    <!-- 上游死了却显示绿点「已启用」——现状 bug ②。草稿给出真实的琥珀态。 -->
+    <div class="svc">
+      <div class="svc-top">
+        <h3 class="svc-name">真实应用</h3>
+        <span class="mount">/realapp</span>
+        <span class="state" style="color:var(--warn)">
+          <span class="dot warn"></span>已启用 · 上游未响应</span>
+      </div>
+      <p class="meta">上游 <code>127.0.0.1:2460</code> · 点「访问」会失败，先把这个程序起起来</p>
+      <div class="actions">
+        <a class="btn primary" href="#">访问</a>
+        <button class="btn">关闭</button>
+        <button class="btn">编辑</button>
+        <button class="btn danger">删除</button>
+      </div>
+    </div>
+
+    <div class="svc">
+      <div class="svc-top">
+        <h3 class="svc-name">模型查看台</h3>
+        <span class="mount">/viewer</span>
+        <span class="state" style="color:var(--warn)">
+          <span class="dot warn"></span>已启用 · 上游未响应</span>
+      </div>
+      <p class="meta">上游 <code>127.0.0.1:8811</code></p>
+      <div class="actions">
+        <a class="btn primary" href="#">访问</a>
+        <button class="btn">关闭</button>
+        <button class="btn">编辑</button>
+        <button class="btn danger">删除</button>
+      </div>
+    </div>
+
+    <!-- 添加服务：现状是页面最底一个常驻大表单。草稿收进抽屉，保持首屏干净。 -->
+    <details style="margin-top:var(--s3)">
+      <summary style="font-size:14px;color:var(--text)">＋ 添加服务</summary>
+      <form onsubmit="return false">
+        <label>名称（必填）</label>
+        <input placeholder="例如：训练配置台">
+        <label>路由路径（以 / 开头）</label>
+        <input placeholder="/train">
+        <label>上游地址</label>
+        <input placeholder="127.0.0.1:8810">
+        <label>备注（可选）</label>
+        <input placeholder="给自己看的说明">
+        <div class="actions" style="margin-top:var(--s4)">
+          <button class="btn primary" type="submit">添加</button>
+        </div>
+        <p class="hint">添加后会立刻出现在上面的清单里，可逐个开启。</p>
+      </form>
+    </details>
+  </section>
+
+  <div class="annot">
+    <h3>本稿相对现状改了什么（3 个已知 bug + 体验）</h3>
+    <ul>
+      <li><b>bug ①</b>「编辑」按钮是死链：它指向 <code>GET /_api/services/&lt;key&gt;/edit</code>，
+          服务端没有这条路由，<b>实测 404</b>。草稿里编辑改为就地展开表单（或补上该路由）。</li>
+      <li><b>bug ②</b> 上游进程已经死了，卡片仍显示绿点「已启用」（判定顺序把
+          <code>enabled</code> 放在 <code>alive</code> 之前）。草稿新增琥珀态
+          「已启用 · 上游未响应」，并说明"先把这个程序起起来"。</li>
+      <li><b>bug ③</b> 点「添加服务」后<b>跳出一屏原始 JSON</b>（表单 POST 到
+          <code>/_api/services</code>，服务端回 JSON、无重定向）。草稿改为提交后回到本页。</li>
+      <li>地址区原来占满首屏（4 个大框 + 二维码）把「服务」挤到下面：草稿首屏
+          只留主地址 + 二维码，其余收进「还有 N 个」。服务提到前列。</li>
+      <li>四个同权重按钮（关闭/访问/编辑/删除）改成：<b>访问</b>为主线，
+          其余为次级，删除用危险色区分。</li>
+      <li>顶部加状态条；底部加「＋ 添加服务」抽屉。</li>
+    </ul>
+  </div>
+
+  <div class="toolbar">
+    <button onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme==='dark'?'light':'dark'">切换深浅色</button>
+  </div>
+</div>
+</body>
+</html>
