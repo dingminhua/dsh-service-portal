@@ -185,6 +185,21 @@ function ServicePortalSettingsTab() {
   const [customErr, setCustomErr] = React.useState("");
   // 高级：手动选地址
   const [advOpen, setAdvOpen] = React.useState(false);
+  // 手动选定的网卡地址（'' = 自动按网卡评分选）
+  const [lanIp, setLanIp] = React.useState("");
+  // 地址提示（"选定的地址不在当前网卡上"等）—— 不能静默吞掉
+  const [lanNote, setLanNote] = React.useState("");
+  // Toast：操作后的即时反馈
+  const [toast, setToast] = React.useState("");
+
+  // Toast：操作后的即时反馈（2.6 秒自动消失，与 dsh-pocket 一致）。
+  // 没有它的时候，开关一切换界面就变，用户不确定「到底保存成功没有」。
+  const toastTimer = React.useRef(null);
+  const showToast = (text) => {
+    setToast(String(text));
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 2600);
+  };
 
   const request = async (path, method, body) => {
     const res = await fetch(API + path, {
@@ -208,6 +223,8 @@ function ServicePortalSettingsTab() {
       if (s && s.kind === "portal") {
         setLanAuth(Boolean(s.lanAuthEnabled));
         setLanEnabled(s.lanEnabled !== false);
+        setLanIp(s.lanIpOverride || "");
+        setLanNote(s.lanNote || "");
       }
     } catch (e) {
       setError(String(e && e.message ? e.message : e));
@@ -244,6 +261,7 @@ function ServicePortalSettingsTab() {
     try {
       const r = await request("/settings", "POST", { lanAuthEnabled: on });
       if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+      showToast(on ? "局域网已需要口令" : "局域网已改为免密");
       await load();
     } catch (e) {
       setLanAuth(!on);
@@ -257,9 +275,25 @@ function ServicePortalSettingsTab() {
     try {
       const r = await request("/settings", "POST", { lanEnabled: on });
       if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+      showToast(on ? "已开启局域网访问" : "已关闭局域网访问");
       await load();
     } catch (e) {
       setLanEnabled(!on);
+      setError(String(e && e.message ? e.message : e));
+    }
+  };
+
+  // ---- 手动选地址（空 = 回自动）----
+  const setLanIpOverride = async (value) => {
+    const previous = lanIp;
+    setLanIp(value);
+    try {
+      const r = await request("/settings", "POST", { lanIpOverride: value });
+      if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+      showToast(value ? ("已固定为 " + value) : "已回到自动选择");
+      await load();
+    } catch (e) {
+      setLanIp(previous);
       setError(String(e && e.message ? e.message : e));
     }
   };
@@ -434,7 +468,11 @@ function ServicePortalSettingsTab() {
       ));
     }
 
-    // 高级：手动选地址
+    // 高级：手动选地址（下拉框选网卡，默认自动）
+    //
+    // 为什么需要它：多网卡机器（VPN / 虚拟网卡 / WSL）上自动选也可能选错，
+    // 而症状是「扫码打不开」——极难自查。给出候选 + 网卡名，用户一眼能认。
+    const candidates = status.lanCandidates || [];
     lanRows.push(h("div", { key: "lan-adv", style: styles.rowBetween },
       h("button", {
         style: Object.assign({}, styles.btn, { border: "none", padding: 0,
@@ -442,25 +480,28 @@ function ServicePortalSettingsTab() {
         type: "button",
         onClick: () => setAdvOpen(!advOpen),
       }, "高级 · 手动选地址 " + (advOpen ? "▾" : "›")),
-      h("span", { style: styles.muted }, "自动（推荐）"),
+      h("span", { style: styles.muted }, lanIp || "自动（推荐）"),
     ));
     if (advOpen) {
-      const all = (status.lanUrls || []);
-      if (!all.length) {
+      lanRows.push(h("div", { key: "adv-label", style: styles.row },
+        h("span", { style: styles.label }, "局域网地址"),
+        h("select", {
+          value: lanIp || "",
+          style: styles.input,
+          onChange: (e) => setLanIpOverride(e.target.value),
+        },
+          h("option", { value: "" }, "自动（推荐）"),
+          candidates.map((ip) =>
+            h("option", { key: ip, value: ip }, ip)),
+        ),
+      ));
+      if (!candidates.length) {
         lanRows.push(h("div", { key: "adv-none", style: styles.muted },
-          "没有可选的地址。"));
-      }
-      for (let i = 0; i < all.length; i++) {
-        lanRows.push(h("div", { key: "adv-" + i, style: styles.row },
-          h("code", { style: styles.code }, all[i]),
-          h("button", {
-            style: styles.btn, type: "button",
-            onClick: () => { try { navigator.clipboard.writeText(all[i]); } catch { /* 忽略 */ } },
-          }, "复制"),
-        ));
+          "没探测到可用的局域网地址（可能没连网线/WiFi）。"));
       }
       lanRows.push(h("div", { key: "adv-note", style: styles.muted },
-        "地址由网卡自动探测；要固定用哪个，把上面的地址发给对方即可。"));
+        "自动选择会按网卡性质评分：物理网卡优先，VPN/虚拟网卡（如 198.18.x）排后。"
+        + "选错了手机就连不上。"));
     }
 
     children.push(h("div", { key: "lan", style: styles.block }, lanRows));
@@ -572,6 +613,10 @@ function ServicePortalSettingsTab() {
   if (error) {
     children.push(h("div", { key: "err", style: styles.err }, String(error)));
   }
+  // 地址提示（比如"选定的地址不在当前网卡上"）：不静默吞，用户要能看见
+  if (lanNote) {
+    children.push(h("div", { key: "lannote", style: styles.warn }, String(lanNote)));
+  }
   if (output && output.stdout && !running) {
     children.push(h("div", { key: "out", style: styles.block },
       h("div", { style: styles.muted }, "启动器输出"),
@@ -584,7 +629,18 @@ function ServicePortalSettingsTab() {
     children.push(h("div", { key: "prob", style: styles.err }, String(status.problem)));
   }
 
-  return h("div", { style: styles.card }, children);
+  const card = h("div", { style: styles.card }, children);
+  if (!toast) return card;
+  // Toast：固定屏幕中央，2.6 秒自动消失（与 dsh-pocket 的反馈方式一致）
+  return h("div", null, card, h("div", {
+    style: {
+      position: "fixed", left: "50%", top: "50%",
+      transform: "translate(-50%, -50%)", zIndex: 10001,
+      background: "rgba(17,24,39,.92)", color: "#fff",
+      padding: "10px 18px", borderRadius: 10, fontSize: 13,
+      boxShadow: "0 8px 24px rgba(0,0,0,.28)", pointerEvents: "none",
+    },
+  }, toast));
 }
 
 export function apply(ctx) {

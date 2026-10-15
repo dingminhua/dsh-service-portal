@@ -25,8 +25,11 @@
 （那是 cloudflared 回连时写的真实客户端 IP）；否则任何能直连端口的人都能
 伪造这个头来绕过登录限速。
 """
+import http.server
 import ipaddress
 import json
+import os
+import socket
 import sys
 import threading
 import time
@@ -440,6 +443,148 @@ class PortalHandler(BaseHTTPRequestHandler):
         self._send(200, body)
 
     # ---- 转发 ----
+    # ---- WebSocket 透传 ----
+
+    def _is_websocket_upgrade(self):
+        """是不是 WebSocket 握手（Upgrade: websocket 且 Connection 含 upgrade）。"""
+        if self.command not in ("GET", "POST"):
+            return False
+        if (self.headers.get("Upgrade") or "").strip().lower() != "websocket":
+            return False
+        connection = (self.headers.get("Connection") or "").lower()
+        return "upgrade" in connection
+
+    def _tunnel_websocket(self, host, port, target, headers):
+        """把 WebSocket 升级请求转到上游，握手成功后做**双向字节透传**。
+
+        只搬字节、不解析帧：门户不需要理解 WebSocket 协议内容（也不该理解 ——
+        解析就得跟着协议版本变），保持成一根哑管道最稳。
+
+        这一段的正确性关键（每一条都是踩出来的）：
+          · 必须把客户端原始的 `Upgrade` / `Connection: Upgrade` / `Sec-WebSocket-*`
+            原样送去，否则上游不认这次握手；
+          · **Host 要改写成上游的**（127.0.0.1:port），因为上游多半按 Host 做校验；
+          · 上游的 101 响应（含 Sec-WebSocket-Accept）必须原样回给客户端 ——
+            少一个头浏览器就断连，且现象是"静默不工作"；
+          · 握手之后**不能再走 HTTP 解析**，两边剩下的字节全都要双向搬。
+        """
+        import socket as socket_module
+
+        upstream_headers = dict(headers)
+        # 透传升级相关头（上面统一过滤里去掉的，这里补回来）
+        for key in ("Upgrade", "Connection", "Sec-WebSocket-Key",
+                    "Sec-WebSocket-Version", "Sec-WebSocket-Protocol",
+                    "Sec-WebSocket-Extensions", "Origin"):
+            value = self.headers.get(key)
+            if value:
+                upstream_headers[key] = value
+        upstream_headers["Host"] = "%s:%d" % (host, port)
+
+        # 1) 自己连上上游并发出握手请求（用裸 socket，便于之后接管双向搬运）
+        try:
+            upstream = socket_module.create_connection(
+                (host, port), timeout=self.upstream_timeout)
+        except OSError as exc:
+            return self._send(
+                502, "502 Bad Gateway：上游 %s:%d 不可达 —— %r\n" % (host, port, exc),
+                content_type="text/plain; charset=utf-8")
+
+        try:
+            request_lines = ["%s %s HTTP/1.1" % (self.command, target)]
+            for key, value in upstream_headers.items():
+                request_lines.append("%s: %s" % (key, value))
+            request_lines.append("")
+            request_lines.append("")
+            upstream.sendall("\r\n".join(request_lines).encode("latin-1"))
+
+            # 2) 读上游的响应头（要点：**必须**原样回给客户端，
+            #    包括 101 的 Sec-WebSocket-Accept）
+            head = b""
+            upstream.settimeout(self.upstream_timeout)
+            while b"\r\n\r\n" not in head:
+                chunk = upstream.recv(4096)
+                if not chunk:
+                    break
+                head += chunk
+                if len(head) > 65536:      # 头异常大：不给它无限吃内存
+                    break
+            if b"\r\n\r\n" not in head:
+                return self._send(
+                    502, "502 Bad Gateway：上游对 WebSocket 握手没有完整响应\n",
+                    content_type="text/plain; charset=utf-8")
+            header_part, _, leftover = head.partition(b"\r\n\r\n")
+            # 原样回写（含状态行与全部响应头）
+            self.connection.sendall(header_part + b"\r\n\r\n")
+
+            status_line = header_part.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+            if "101" not in status_line:
+                # 上游没同意升级：把剩余响应体也给它，然后结束（不假装成功）
+                if leftover:
+                    self.connection.sendall(leftover)
+                return None
+
+            # 3) 双向透传：两个方向各起一个线程，把剩下所有字节搬运过去
+            self.close_connection = True
+            self._relay_both_ways(upstream, leftover)
+            return None
+        except Exception as exc:
+            try:
+                self._send(502, "502 Bad Gateway：WebSocket 透传失败 —— %r\n" % (exc,),
+                           content_type="text/plain; charset=utf-8")
+            except Exception:
+                pass
+            return None
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+    def _relay_both_ways(self, upstream, initial):
+        """双向字节搬运，直到任一侧关闭。
+
+        用线程而非 select：Windows 上 select 对 socket 数量有限制且语义不同，
+        而这里只有两根管子，线程最直接。任何一侧出错/关闭都要**两边都收摊**，
+        否则会留下半开连接（手机上表现为"一直转圈"）。
+        """
+        import socket as socket_module
+        import threading
+
+        client_sock = self.connection
+        stop = threading.Event()
+        timeout_error = socket_module.timeout
+
+        def copy(src, dst, first=None):
+            try:
+                if first:
+                    dst.sendall(first)
+                while not stop.is_set():
+                    src.settimeout(1.0)
+                    try:
+                        data = src.recv(16384)
+                    except timeout_error:
+                        continue          # 只是没数据，不是断开
+                    except OSError:
+                        break
+                    if not data:
+                        break             # 对端关闭
+                    dst.sendall(data)
+            except Exception:
+                pass
+            finally:
+                stop.set()
+
+        up_thread = threading.Thread(target=copy, args=(upstream, client_sock),
+                                     daemon=True)
+        down_thread = threading.Thread(target=copy, args=(client_sock, upstream),
+                                       daemon=True)
+        up_thread.start()
+        down_thread.start()
+        up_thread.join()
+        down_thread.join()
+
+    # ---- HTTP 转发 ----
+
     def _proxy(self):
         path = self.path.split("?", 1)[0]
 
@@ -508,6 +653,17 @@ class PortalHandler(BaseHTTPRequestHandler):
                 continue
             headers[key] = value
 
+        # ---- WebSocket 升级：转成裸 TCP 双向透传 ----
+        #
+        # 为什么必须支持：本机服务里有相当一部分靠 WebSocket 工作 ——
+        # Jupyter 的 kernel 通道、训练看板的实时曲线、日志流式推送等。
+        # 早先的实现只走 http.client「一问一答」，遇上 Upgrade 请求会：
+        #   · Connection 头被过滤掉 → 上游看不到升级意图 → 握手失败；
+        #   · 即便握手成功，也没有双向管道把帧搬来搬去。
+        # 用户看到的现象是「页面能打开，但实时数据不刷新 / 终端连不上」。
+        if self._is_websocket_upgrade():
+            return self._tunnel_websocket(host, port, target, headers)
+
         import http.client
         conn = http.client.HTTPConnection(host, port,
                                           timeout=self.upstream_timeout)
@@ -548,8 +704,45 @@ class PortalHandler(BaseHTTPRequestHandler):
     do_OPTIONS = _proxy
 
 
-def make_portal_server(listen_port, config, listen_host="127.0.0.1"):
+def _make_server_class():
+    """门户服务器类：**独占绑定**（Windows 上必须这样）。
+
+    为什么不用默认的 `allow_reuse_address = 1`：
+    在 Windows 上 `SO_REUSEADDR` 的语义是「允许**重复**绑定同一端口」，
+    所以端口被别的进程占着时，我们的绑定**照样成功**，然后流量被内核随机分到
+    两个进程之一 —— 表现为「有时能访问、有时打不开」，极难排查。
+    改用 `SO_EXCLUSIVEADDRUSE`：端口被占就直接抛错，交由启动器换端口。
+    """
+    import socketserver
+
+    class _PortalServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        # Windows 上用 SO_EXCLUSIVEADDRUSE 独占；其他平台沿用 SO_REUSEADDR
+        # （Linux 上它的语义是「快速重用 TIME_WAIT」，不会重复绑定）。
+        allow_reuse_address = os.name != "nt"
+        if os.name == "nt":
+            allow_reuse_port = False
+
+        def server_bind(self):
+            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                self.socket.setsockopt(socket.SOL_SOCKET,
+                                       socket.SO_EXCLUSIVEADDRUSE, 1)
+            # 直接调父类的父类，避开 HTTPServer 里对 allow_reuse_address 的处理
+            socketserver.TCPServer.server_bind(self)
+            host, port = self.server_address[:2]
+            self.server_name = host
+            self.server_port = port
+
+    return _PortalServer
+
+
+def make_portal_server(listen_port, config, listen_host="0.0.0.0"):
     """创建门户服务器（listen_port=0 时自动分配端口）。
+
+    ``listen_host`` 默认 **0.0.0.0**（全部网卡）—— 门户要能被同一 WiFi 下的
+    手机访问，只绑 127.0.0.1 的话手机永远连不上（扫码后就是「打不开」）。
+    认证层按 Host 分类做豁免，所以暴露到局域网是安全的：loopback/lan 免密、
+    public（公网/自建域名）必须口令。
 
     ``config`` 是 dict，键与 PortalHandler 的类属性同名：
       password / secret / session_ttl / cookie_secure / open_classes /
@@ -572,4 +765,4 @@ def make_portal_server(listen_port, config, listen_host="127.0.0.1"):
         "upstream_timeout": float(config.get("upstream_timeout", 60.0)),
     }
     handler = type("BoundPortalHandler", (PortalHandler,), attrs)
-    return ThreadingHTTPServer((listen_host, int(listen_port)), handler)
+    return _make_server_class()((listen_host, int(listen_port)), handler)

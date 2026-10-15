@@ -105,35 +105,39 @@ def http_ok(url, timeout=4.0):
 
 
 def detect_lan_ips():
-    """探测本机所有可用的私网 IPv4（内网访问地址就是 http://<ip>:<port>）。"""
-    ips = []
-    # 主路由探测：连一个外部地址（不发数据）拿到默认出口的本机 IP
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(0.4)
-            sock.connect(("8.8.8.8", 80))
-            ips.append(sock.getsockname()[0])
-    except OSError:
-        pass
-    # 再补上所有网卡的私网地址（多网卡/虚拟网卡场景）
-    try:
-        import ipaddress
-        hostname = socket.gethostname()
-        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-            addr = info[4][0]
-            if addr in ips:
-                continue
-            try:
-                ip = ipaddress.ip_address(addr)
-            except ValueError:
-                continue
-            if ip.is_loopback or ip.is_link_local:
-                continue
-            if ip.is_private:
-                ips.append(addr)
-    except OSError:
-        pass
-    return ips
+    """内网地址列表（**按评分从高到低**，第一个最推荐扫码）。
+
+    评分逻辑见 tools/lan_address.py：物理网卡加分、VPN/虚拟网卡减分。
+    老实现是「取第一个非回环私网地址」，在多网卡机器上会拿到 Radmin VPN 的
+    198.18.0.1（手机连不上）—— 用户看到的现象就是「扫码打不开」。
+    """
+    import lan_address
+    return lan_address.detect_lan_ips()
+
+
+def lan_candidates_detailed():
+    """候选明细（设置页「高级·手动选地址」用它显示网卡名）。"""
+    import lan_address
+    return lan_address.detect_lan_candidates()
+
+
+def lan_urls_for(port, override=None):
+    """内网访问地址列表。override 指定时**只有它**（用户手动锁定的地址）。
+
+    返回 (urls, note)：note 说明覆盖是否生效（IP 不在本机时给出提示，
+    不静默忽略 —— 否则用户以为选了却没生效）。
+    """
+    candidates = detect_lan_ips()
+    if override:
+        if override in candidates:
+            return ["http://%s:%d" % (override, port)], None
+        # 用户选的地址当前不在本机网卡上：仍按他的选择生成，但明确提示
+        return (["http://%s:%d" % (override, port)],
+                "选定的地址 %s 不在当前网卡列表里，请检查是否已插网线/连 WiFi"
+                % override)
+    if not candidates:
+        return [], None
+    return ["http://%s:%d" % (ip, port) for ip in candidates], None
 
 
 def load_state():
@@ -145,16 +149,52 @@ def load_state():
 
 
 def save_state(state):
+    """原子写状态文件。
+
+    **临时文件名必须唯一**（带 pid）：早期用固定的 `portal_state.json.tmp`，
+    两个门户进程同时启动时（DSH 的 autoStart 与设置页按钮并发，或用户手点两次）
+    会同时写同一个临时文件 —— Windows 上后开的那个直接
+    `PermissionError [Errno 13]`，门户起不来，而日志里只有一堆栈帧。
+    这是实际踩到的 bug：表现为「点开启没反应 / 报 502」。
+
+    仍然保留重试：杀毒软件/索引器会在文件刚创建时短暂占用，重试即可穿过。
+    """
     os.makedirs(RUNS_DIR, exist_ok=True)
-    tmp = STATE_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(state, handle, ensure_ascii=False, indent=2)
-    os.replace(tmp, STATE_FILE)
+    # 唯一临时名：pid + 线程 id（同一进程内也可能并发调用）
+    unique = "%s.%d.%d.tmp" % (STATE_FILE, os.getpid(),
+                               threading.get_ident())
+    last_error = None
+    for attempt in range(5):
+        try:
+            with open(unique, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, ensure_ascii=False, indent=2)
+            os.replace(unique, STATE_FILE)
+            return True
+        except OSError as exc:
+            last_error = exc
+            try:
+                os.remove(unique)
+            except OSError:
+                pass
+            time.sleep(0.1 * (attempt + 1))
+    print("提示：状态文件写不进去（%s）：%s" % (STATE_FILE, last_error),
+          file=sys.stderr)
+    return False
 
 
 def clear_state():
     try:
         os.remove(STATE_FILE)
+    except OSError:
+        pass
+    # 顺手清理可能残留的临时文件（崩溃留下的）
+    try:
+        for name in os.listdir(RUNS_DIR):
+            if name.startswith(os.path.basename(STATE_FILE)) and name.endswith(".tmp"):
+                try:
+                    os.remove(os.path.join(RUNS_DIR, name))
+                except OSError:
+                    pass
     except OSError:
         pass
 
@@ -168,13 +208,46 @@ def read_password():
 
 
 def write_password(password):
+    """把口令写到 runs/portal_password.txt（方便用户/脚本查看，**不是**唯一凭据）。
+
+    这个文件只是「给人看的副本」——真正的凭据在 runs/portal_state.json 里。
+    所以它写失败**不该让门户起不来**（早期版本直接抛 traceback 或退出码 4，
+    结果用户看到「启动失败」却不知道为什么，而门户其实完全能跑）。
+
+    写失败最常见的原因（Windows）：
+      · 杀毒软件/索引器刚创建文件就抢着扫描，此时 open(...,'w') 会短暂
+        报 PermissionError [Errno 13] —— 文件甚至还不存在。重试几次就好；
+      · 旧门户进程仍占着该文件。
+    因此这里用**原子写**（先写临时文件再替换）+ 重试，把这类瞬时冲突挡掉。
+    """
     os.makedirs(RUNS_DIR, exist_ok=True)
-    with open(PASSWORD_FILE, "w", encoding="utf-8") as handle:
-        handle.write(password + "\n")
-    try:
-        os.chmod(PASSWORD_FILE, 0o600)
-    except OSError:
-        pass
+    temp_path = PASSWORD_FILE + ".tmp"
+    last_error = None
+    for attempt in range(5):
+        try:
+            # 原子写：临时文件 + os.replace。避免「创建后被别的进程抓住」的窗口，
+            # 也避免写一半留下半个文件。
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                handle.write(password + "\n")
+            os.replace(temp_path, PASSWORD_FILE)
+            try:
+                os.chmod(PASSWORD_FILE, 0o600)
+            except OSError:
+                pass
+            return True
+        except OSError as exc:
+            last_error = exc
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
+            time.sleep(0.15 * (attempt + 1))
+    print("提示：口令副本文件写不进去（%s）：%s" % (PASSWORD_FILE, last_error),
+          file=sys.stderr)
+    print("不影响使用：口令已存在 runs/portal_state.json，门户会正常启动。",
+          file=sys.stderr)
+    return True
 
 
 # --------------------------------------------------------------- 服务进程管理
@@ -297,7 +370,16 @@ def run_portal(args):
     public_url_holder = {"url": None}
     tunnel_proc = {"proc": None}
     # 运行时可改的开关（改完立即生效，落盘到 runs/portal_state.json）
-    runtime = {"lan_auth": bool(args.lan_auth), "lan_enabled": True}
+    #
+    # 手动选的地址与两个开关都从上次的状态文件恢复（参数没显式给时）——
+    # 否则「重启后设置丢了」：用户明明在设置页选过网卡，重启又回到自动。
+    saved = load_state() or {}
+    saved_override = str(saved.get("lan_ip_override") or "").strip()
+    runtime = {
+        "lan_auth": bool(args.lan_auth) or bool(saved.get("lan_auth_enabled")),
+        "lan_enabled": saved.get("lan_enabled") is not False,
+        "lan_ip_override": (args.lan_ip or "").strip() or saved_override,
+    }
 
     # ---- 门户回调 ----
     def state_snapshot():
@@ -313,12 +395,19 @@ def run_portal(args):
                 item["alive"] = False
             entries.append(item)
         public_url = public_url_holder["url"]
-        lan_urls = ["http://%s:%d" % (ip, args.port) for ip in detect_lan_ips()]
+        override = runtime.get("lan_ip_override") or ""
+        lan_urls, lan_note = lan_urls_for(args.port, override)
         if not lan_urls:
             lan_urls = ["http://127.0.0.1:%d" % args.port]
+        # 候选明细：设置页「高级·手动选地址」的下拉框用它（带网卡名，便于判断）
+        candidates = lan_candidates_detailed()
         return {
             "services": entries,
             "lan_urls": lan_urls,
+            "lan_candidates": [item["ip"] for item in candidates],
+            "lan_candidate_detail": candidates,
+            "lan_ip_override": override,
+            "lan_note": lan_note,
             "public_url": public_url,
             "portal_port": args.port,
             "host_repo": host_repo,
@@ -445,11 +534,22 @@ def run_portal(args):
                 runtime["lan_auth"] = bool(data["lanAuthEnabled"])
             if "lanEnabled" in data:
                 runtime["lan_enabled"] = bool(data["lanEnabled"])
+            if "lanIpOverride" in data:
+                # 手动选地址：空字符串 = 回到自动（按网卡评分）
+                value = str(data["lanIpOverride"] or "").strip()
+                if value and value not in detect_lan_ips():
+                    handler._send_json(400, {
+                        "ok": False,
+                        "error": "%s 不是本机当前的网卡地址，请从候选里选" % value,
+                    })
+                    return True
+                runtime["lan_ip_override"] = value
             # 立即落盘，重启门户后开关还在（不落盘就是「改完就丢」）
             try:
                 st = load_state() or {}
                 st["lan_auth_enabled"] = bool(runtime["lan_auth"])
                 st["lan_enabled"] = bool(runtime["lan_enabled"])
+                st["lan_ip_override"] = runtime["lan_ip_override"]
                 save_state(st)
             except OSError as exc:
                 handler._send_json(500, {"ok": False, "error": "写状态失败：%r" % exc})
@@ -458,6 +558,7 @@ def run_portal(args):
                 "ok": True,
                 "lan_auth_enabled": bool(runtime["lan_auth"]),
                 "lan_enabled": bool(runtime["lan_enabled"]),
+                "lan_ip_override": runtime["lan_ip_override"],
             })
             return True
         if method == "POST" and route == "/tunnel/start":
@@ -547,27 +648,54 @@ def run_portal(args):
     # 绑定端口这一步最容易被环境挡住，必须**明确报错并退出**，不能继续往下
     # 打印「门户已启动」—— 那是最坏的一类 bug（不崩、只给错误答案：
     # 界面显示成功，实际什么都没在听）。
-    try:
-        server = portal_proxy.make_portal_server(args.port, {
-        "password": password,
-        "cookie_secure": False,     # 内网是 http；公网经隧道是 https 也能用
-        # 内网免密开关**动态可改**：设置页切「局域网访问密码」时立即生效，
-        # 不重启门户（重启会换掉隧道域名，代价太大）。
-        # loopback 永远免密：那是本机自己，要求口令毫无意义。
-        "open_classes_provider": lambda: (
-            ("loopback",) if runtime["lan_auth"] else ("loopback", "lan")),
-        "lan_enabled_provider": lambda: runtime["lan_enabled"],
-        "console_state": console_state,
-        "console_page": lambda state, is_public: portal_console.console_html(
-            state, is_public=is_public),
-        "api_handler": api_handler,
-        "resolve_upstream": resolve_upstream,
-        "rate_limiter": portal_proxy.RateLimiter(),
-        })
-    except OSError as exc:
-        # WinError 10013 = 端口被系统保留（Hyper-V/WSL 的 excludedportrange）或
-        # 权限不足；10048 = 已被占用。两种情况都要给出可操作的提示。
-        winerr = getattr(exc, "winerror", None)
+    #
+    # 端口被占用（10048 / EADDRINUSE）时**自动往后试几个**（对齐 dsh-pocket 的
+    # 「端口自适应」）：因为「上个门户没停干净」是最常见的情况，为用户这点小事
+    # 报错退出太粗糙。试到就继续，全试完才报错。
+    # 但 WinError 10013（系统保留段）**不往后试** —— 那是整段预约，
+    # 逐个试只会连着失败十几次，不如直接告诉用户原因。
+    bind_attempts = [args.port] if args.no_port_fallback else (
+        [args.port] + [args.port + i for i in range(1, 6)])
+    server = None
+    last_error = None
+    for attempt_port in bind_attempts:
+        try:
+            server = portal_proxy.make_portal_server(attempt_port, {
+                "password": password,
+                "cookie_secure": False,  # 内网是 http；公网经隧道是 https 也能用
+                # 内网免密开关**动态可改**：设置页切「局域网访问密码」时立即生效，
+                # 不重启门户（重启会换掉隧道域名，代价太大）。
+                # loopback 永远免密：那是本机自己，要求口令毫无意义。
+                "open_classes_provider": lambda: (
+                    ("loopback",) if runtime["lan_auth"] else ("loopback", "lan")),
+                "lan_enabled_provider": lambda: runtime["lan_enabled"],
+                "console_state": console_state,
+                "console_page": lambda state, is_public: portal_console.console_html(
+                    state, is_public=is_public),
+                "api_handler": api_handler,
+                "resolve_upstream": resolve_upstream,
+                "rate_limiter": portal_proxy.RateLimiter(),
+            })
+        except OSError as exc:
+            last_error = exc
+            winerr = getattr(exc, "winerror", None)
+            if winerr == 10013 or "10013" in str(exc):
+                break                     # 保留段：试下一个也没用
+            if winerr == 10048 or getattr(exc, "errno", None) in (98, 48):
+                if attempt_port != bind_attempts[-1]:
+                    print("端口 %d 已被占用，换 %d 试试…"
+                          % (attempt_port, attempt_port + 1), file=sys.stderr)
+                continue
+            break                         # 其他错误：不猜，直接报
+        if attempt_port != args.port:
+            print("注意：实际监听端口是 %d（原定 %d 被占用）"
+                  % (attempt_port, args.port), file=sys.stderr)
+        args.port = attempt_port           # 后续状态/隧道/URL 都用真实端口
+        break
+
+    if server is None:
+        exc = last_error
+        winerr = getattr(exc, "winerror", None) if exc else None
         print("")
         print("=" * 66, file=sys.stderr)
         print("门户启动失败：无法绑定端口 %d" % args.port, file=sys.stderr)
@@ -576,16 +704,17 @@ def run_portal(args):
         if winerr == 10013:
             print("", file=sys.stderr)
             print("这是 Windows **保留端口**（Hyper-V / WSL / Docker 会成段预约）。", file=sys.stderr)
-            print("查一下 8899 是否落在保留段里：", file=sys.stderr)
+            print("查一下 %d 是否落在保留段里：" % args.port, file=sys.stderr)
             print("    netsh interface ipv4 show excludedportrange protocol=tcp", file=sys.stderr)
             print("换一个没被保留的端口即可，例如：", file=sys.stderr)
             print("    python -X utf8 tools/portal_run.py --port 18899", file=sys.stderr)
             print("也可以在 DSH 设置页把「门户端口」改成该端口。", file=sys.stderr)
         elif winerr == 10048:
             print("", file=sys.stderr)
-            print("端口已被占用。先停掉旧的门户：", file=sys.stderr)
+            print("端口 %d 及其后 5 个都被占用。" % args.port, file=sys.stderr)
+            print("先停掉旧的门户：", file=sys.stderr)
             print("    python -X utf8 tools/portal_run.py --stop", file=sys.stderr)
-            print("或换端口：--port 18899", file=sys.stderr)
+            print("或显式换端口：--port 18899", file=sys.stderr)
         return 3
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
@@ -607,6 +736,8 @@ def run_portal(args):
         "public_url": public_url_holder["url"],
         "lan_urls": state_snapshot()["lan_urls"],
         "lan_auth_enabled": bool(args.lan_auth),
+        "lan_enabled": bool(runtime["lan_enabled"]),
+        "lan_ip_override": runtime["lan_ip_override"],
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
 
@@ -764,6 +895,10 @@ def build_parser():
     ap.add_argument("--lan-only", action="store_true", help="只开内网，不建隧道")
     ap.add_argument("--lan-auth", action="store_true",
                     help="内网访问也要求口令（默认内网免密，仅同一局域网可用）")
+    ap.add_argument("--lan-ip", default="",
+                    help="手动指定内网访问用的网卡地址（默认按网卡评分自动选）")
+    ap.add_argument("--no-port-fallback", action="store_true",
+                    help="端口被占用时不要自动往后试（默认会往后试 5 个）")
     ap.add_argument("--status", action="store_true", help="显示状态")
     ap.add_argument("--stop", action="store_true", help="停止门户")
     return ap

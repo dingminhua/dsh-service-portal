@@ -206,13 +206,15 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
+| `tools/check_portal_bind.py` | 7 | **只绑 127.0.0.1**（手机永远连不上）、Windows `SO_REUSEADDR` 重复绑定（流量随机分流）、端口被占不换端口 |
+| `tools/check_portal_websocket.py` | 8 | 升级头被过滤（握手失败）、101 响应没原样回传、握手后没有双向管道（实时数据不刷新） |
 | `tools/check_portal_integration.py` | — | **畸形 Host 被判成内网**（`garbage value` 竟免密）、控制台链接双斜杠、局域网总开关只改界面不改认证 |
 | `tools/check_portal_registry.py` | 88 | 路由重复/非法、key 冲突、**改完不落盘**（重启就丢）、坏文件崩溃 |
 | `tools/check_portal_console.py` | — | 未启用服务可点、服务名里塞 `<script>`（存储型 XSS）、二维码不确定 |
 | `tools/check_portal_proxy.py` | — | **自建域名被误判成内网**、认证未前置、限速失效、`cf-connecting-ip` 被伪造 |
 | `tools/check_portal_auth.py` | 35 | 未登录可访问、会话被伪造/篡改/过期、口令进 cookie |
 | `tools/check_tunnel_auth.py` | 35 | 认证绕过、前缀没剥、上游错、未知前缀 200 兜底 |
-| `tools/check_tunnel_domain.py` | 10 | 复用**上一次**的域名（追加日志里读到旧行：公网 530、本机正常） |
+| `tools/check_tunnel_domain.py` | 10 | 复用**上一次**的域名（追加日志里读到旧行） |
 | `tools/check_plugin.py` | 41 | 插件导出契约、服务已死却报「运行中」、口令形态非法 |
 
 ### 端到端（真起门户进程，不是单元级）
@@ -221,18 +223,22 @@ python -X utf8 tools/portal_run.py --status / --stop
 | :--- | ---: | :--- |
 | `test/acceptance_portal.py` | 29 | 页面增删改开关服务、路由改动生效、内网免密/外网口令、二维码/手机端/限速/健康检查真实性、三分类 fail-closed、依赖缺失返回 2 |
 | `test/test_autostart.py` | 4 | **插件加载后门户自动跑起来**（「装好即用」）、只开内网、内网地址可用 |
-| `test/test_lan_toggle.py` | 10 | 内网口令开关**立即生效**（不重启门户）、本机永远免密、公网不受影响、无会话被拦 |
+| `test/test_lan_address.py` | 16 | **网卡评分选地址**（物理网卡优先、198.18.x 降权）、手动选地址立即生效、非法地址被拒、覆盖值落盘 |
+| `test/test_lan_toggle.py` | 10 | 内网口令开关**立即生效**（不重启门户）、本机永远免密、公网不受影响 |
 | `test/test_lan_switch.py` | 6 | 局域网访问总开关：关掉后内网要求口令、本机不受影响、重开恢复 |
 | `test/test_settings_data.py` | 10 | 设置页数据链：状态字段、二维码生成、二维码只给本门户地址（防图床） |
+| `test/test_host_buttons.py` | 8 | **走插件宿主 API**（设置页按钮真正调用的路径）：开启→状态→重复开启→停止 |
 
 **依赖缺失必须「跳过并返回 2」，不得静默通过** —— 这是本仓库的硬纪律。
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 27 项宿主端控制检验
+& $node --test test/host.test.mjs      # 36 项宿主端控制检验
 & $node --test test/client.test.mjs    # 17 项客户端分发契约检验
 
 # Python 控制检验
+python -X utf8 tools\check_portal_bind.py
+python -X utf8 tools\check_portal_websocket.py
 python -X utf8 tools\check_portal_integration.py
 python -X utf8 tools\check_portal_registry.py
 python -X utf8 tools\check_portal_console.py
@@ -245,9 +251,11 @@ python -X utf8 tools\check_plugin.py
 # 端到端（会真起门户进程，几十秒）
 python -X utf8 test\acceptance_portal.py
 python -X utf8 test\test_autostart.py
+python -X utf8 test\test_lan_address.py
 python -X utf8 test\test_lan_toggle.py
 python -X utf8 test\test_lan_switch.py
 python -X utf8 test\test_settings_data.py
+python -X utf8 test\test_host_buttons.py   # 需要 DSH 在跑
 ```
 
 ## 安全边界（必须如实理解）

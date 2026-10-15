@@ -430,3 +430,65 @@ test("stop_all：状态文件丢了也要能按端口清理孤儿进程", () => 
   assert.ok(src.includes("_pids_listening_on"),
     "stop_all 必须按端口兜底扫进程（否则状态文件丢了就停不掉）");
 });
+
+// ---------------------------------------------------------------------------
+// 解释器可写性（本机实测的真 bug，导致「启动后访问失败」）
+//
+// 拦的 bug：pythonFor 只检查文件**是否存在**，于是选中了
+// ld-rl-poker\.venv313 的 python —— 它带沙箱访问控制标记，能写宿主仓库自己的
+// runs/，但写 dsh-service-portal/runs 会被拒（PermissionError 13）。
+// 后果：门户进程活着、端口在听，但**状态/口令一个都存不下**，
+// 设置页读不到状态 → 永远显示「未运行」/ 点开启报 502。
+// ---------------------------------------------------------------------------
+
+test("usablePython：必须真的试写，而不是只看文件存在", () => {
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const start = src.indexOf("function usablePython");
+  assert.ok(start > 0, "找不到 usablePython");
+  const rest = src.slice(start);
+  const nextFn = rest.indexOf("\nfunction ", 10);
+  const body = nextFn > 0 ? rest.slice(0, nextFn) : rest;
+  assert.ok(body.includes("spawnSync"),
+    "必须实际运行解释器去试写（文件存在 ≠ 能写）");
+  assert.ok(body.includes("existsSync(probeFile)"),
+    "要确认文件真的出现了，而不是只看退出码");
+});
+
+test("usablePython：探测目录是门户自己的 runs/", () => {
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  assert.ok(src.includes("usablePython(repo.repoPath, repo.pythonPath,"),
+    "startPublic 必须把探测目录传进去");
+  assert.ok(src.includes('join(repo.infraPath, "runs")'),
+    "探测目录必须是门户自己的 runs/（换成 TEMP 或宿主 runs 会得出错误结论）");
+});
+
+test("usablePython：探测文件用完必删（不留垃圾）", () => {
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const start = src.indexOf("function usablePython");
+  const rest = src.slice(start);
+  const body = rest.slice(0, rest.indexOf("\nfunction ", 10));
+  assert.ok(body.includes("rmSync(probeFile"),
+    "探测用的临时文件必须删掉，否则每次启动都在 runs/ 留垃圾");
+});
+
+test("save_state：临时文件名唯一（并发启动不再 PermissionError）", () => {
+  const src = readFileSync(join(ROOT, "tools", "portal_run.py"), "utf8");
+  const start = src.indexOf("def save_state");
+  const body = src.slice(start, src.indexOf("\ndef clear_state"));
+  assert.ok(body.includes("os.getpid()"),
+    "临时名必须含 pid —— 固定名并发写会 PermissionError（实测踩过）");
+  assert.ok(!/tmp = STATE_FILE \+ "\.tmp"/.test(body),
+    "不能再用固定的 STATE_FILE + '.tmp'");
+  assert.ok(body.includes("os.replace"),
+    "仍要原子替换（避免写一半留下坏文件）");
+});
+
+test("write_password：写失败不阻断启动（它只是给人看的副本）", () => {
+  const src = readFileSync(join(ROOT, "tools", "portal_run.py"), "utf8");
+  const start = src.indexOf("def write_password");
+  const body = src.slice(start, src.indexOf("\ndef ", start + 10));
+  assert.ok(body.includes("return True"),
+    "写不进去也要 return True —— 真凭据在 portal_state.json，不该因此起不来");
+  assert.ok(body.includes("for attempt in range"),
+    "瞬时占用（杀毒扫描）要靠重试穿过");
+});
