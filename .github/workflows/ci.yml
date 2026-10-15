@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.18.4
+
+      - name: Build client bundle
+        run: node client/build.mjs
+
+      - name: Host-side control checks
+        run: node --test test/host.test.mjs
+
+      - name: Client distribution contract checks
+        run: node --test test/client.test.mjs
+
+      - name: Verify package contents
+        run: npm pack --dry-run

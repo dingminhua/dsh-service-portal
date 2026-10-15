@@ -1,0 +1,16 @@
+# dsh-service-portal bundle patch.
+#
+# 把「对外服务门户」接入 DSH host plane：本机服务 → cloudflared 隧道 +
+# Basic Auth 认证代理（随机域名 + 随机口令）。
+#
+# 本插件是 **启动器**，不是第二份实现：
+#   隧道与认证代理由本仓库 tools/start_public_gui.py + tools/tunnel_auth.py
+#   承担（35 项控制检验通过）。插件只负责：启停那个脚本 → 读它的凭据
+#   JSON → 在设置页显示连接与口令。
+#
+# 依赖宿主 webServer：插件在 apply() 里用 ctx.inject(["webServer"]) 软挂载，
+# 注册 /service-portal/api 前缀路由（状态/启停/口令）与 /service-portal 前端。
+# headless 组合下 webServer 不存在，插件保持 fail-closed，不宣称 Web 能力就绪。
+- insert:
+    - id: dsh-service-portal
+      name: dsh-service-portal

@@ -1,0 +1,73 @@
+{
+  "name": "dsh-service-portal",
+  "displayName": "DSH Service Portal",
+  "description": "对外服务门户：一个随机域名 + 一个随机口令，把本机的服务按需对外开放（cloudflared 隧道 + Basic Auth 认证代理）。",
+  "version": "0.1.0",
+  "author": "dingminhua",
+  "copyright": "Copyright (c) 2026 LaoDing",
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "cloudflared",
+    "tunnel",
+    "reverse-proxy",
+    "basic-auth",
+    "remote-access"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "lib/index.js",
+  "icon": "icons/dsh-service-portal-128.png",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "icons",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node client/build.mjs",
+    "prepack": "node client/build.mjs",
+    "test": "node --test test/host.test.mjs test/client.test.mjs",
+    "check": "npm run build && npm test"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dingminhua/dsh-service-portal.git"
+  },
+  "homepage": "https://github.com/dingminhua/dsh-service-portal#readme",
+  "bugs": {
+    "url": "https://github.com/dingminhua/dsh-service-portal/issues"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.4"
+  }
+}
