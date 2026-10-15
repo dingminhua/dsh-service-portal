@@ -31,8 +31,7 @@ const inject = ["slots", "connection"];
 
 const API = "/service-portal/api";
 
-// 项目信息（标题行右上角展示，对齐 dsh-pocket 的同款区块）
-const DEVELOPER = "丁敏华 (dingminhua)";
+// 项目仓库地址（右上角那句求 Star 的链接目标）
 const REPO_URL = "https://github.com/dingminhua/dsh-service-portal";
 
 // 局域网口令长度门槛 —— 与后端 portal_login.validate_lan_pin 一致。
@@ -114,16 +113,11 @@ const styles = {
   warnInline: {
     color: "var(--dsw-alias-state-warning-primary,#d97706)", fontSize: 12,
   },
-  // 右上角「开发者 / 求 Star」区块（对齐 dsh-pocket 排版）
-  credit: {
-    fontSize: 12, textAlign: "right", flexShrink: 0,
-    color: "var(--dsw-alias-label-tertiary,#8b93a1)", lineHeight: 1.5,
-    marginLeft: 12,
-  },
-  creditLine: { whiteSpace: "nowrap" },
+  // 右上角「⭐ 求颗 Star」：一句链接，右对齐且不换行
   creditLink: {
     color: "var(--dsw-alias-brand-primary,#4f6ef7)", fontSize: 12,
-    lineHeight: 1.6, textDecoration: "underline", whiteSpace: "nowrap",
+    lineHeight: 1.6, textDecoration: "underline",
+    whiteSpace: "nowrap", flexShrink: 0, marginLeft: 12,
   },
   tag: {
     fontSize: 11, padding: "1px 7px", borderRadius: 999,
@@ -408,9 +402,8 @@ function ServicePortalSettingsTab() {
 
   const children = [];
 
-  // 标题行 + 右上角「开发者 / 求颗 Star」（对齐 dsh-pocket 的同款区块）。
-  // 为什么放这里：这是设置页唯一的「关于」区域，用户第一次打开就能看到作者与
-  // 项目地址；放在页面底部几乎没人会滚到。
+  // 标题行 + 右上角一句「⭐ 求颗 Star」。
+  // 只要一句：⨯ 开发者署名、⨯ 第三行 CTA —— 三行堆在角落太吵，用户明确要求简化。
   children.push(h("div", { key: "head", style: styles.head },
     h("img", {
       src: SERVICE_PORTAL_PLUGIN_ICON, alt: "", width: 32, height: 32,
@@ -421,14 +414,10 @@ function ServicePortalSettingsTab() {
       h("div", { style: styles.muted },
         "手机扫码打开的就是电脑上的这个界面，实时同步"),
     ),
-    h("div", { style: styles.credit },
-      h("div", { style: styles.creditLine }, "开发者：" + DEVELOPER),
-      h("div", { style: styles.creditLine }, "⭐ 顺手留颗 Star，作者能高兴一整天"),
-      h("a", {
-        href: REPO_URL, target: "_blank", rel: "noreferrer",
-        style: styles.creditLink,
-      }, "行，给你一颗 Star"),
-    ),
+    h("a", {
+      href: REPO_URL, target: "_blank", rel: "noreferrer",
+      style: styles.creditLink,
+    }, "⭐ 顺手留颗 Star，作者能高兴一整天"),
   ));
 
   // 状态行

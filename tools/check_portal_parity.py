@@ -36,23 +36,30 @@ def main():
     login = read("tools/portal_login.py")
 
     # ================= ① 右上角鼓励区 =================
-    print("[① 右上角「开发者 / 求 Star」]")
-    check("客户端有开发者与仓库常量",
-          'const DEVELOPER =' in client and 'const REPO_URL =' in client)
-    check("渲染了「开发者：」一行", "开发者：" in client)
-    check("渲染了求 Star 的文案", "顺手留颗 Star" in client)
-    check("求 Star 是**可点链接**（指向仓库，新窗口打开）",
-          'href: REPO_URL' in client and 'target: "_blank"' in client
+    # 用户要求：**就简单一句「星星 + 鼓励」**，不要开发者署名和第三行 CTA。
+    # 所以这里断言的是「精简后的形态」—— 别再加回多行。
+    print("[① 右上角一句「⭐ 求颗 Star」]")
+    check("有仓库地址常量", "const REPO_URL =" in client)
+    check("渲染了一句求 Star 文案", "顺手留颗 Star" in client)
+    check("带 ⭐ 星星", "⭐ 顺手留颗 Star" in client)
+    check("是可点链接（指向仓库，新窗口打开）",
+          "href: REPO_URL" in client and 'target: "_blank"' in client
           and '"noreferrer"' in client,
           "（dsh-pocket 也是 <a>，不是纯文字）")
-    check("链接文案与 dsh-pocket 同款", "行，给你一颗 Star" in client)
     check("区块在标题行内（不是页面底部）",
-          client.index('key: "head"') > 0
-          and client.index("顺手留颗 Star") - client.index('key: "head"') < 800,
-          "（距离标题行 800 字符内）")
-    check("有对应样式 credit / creditLine / creditLink",
-          "credit:" in client and "creditLine:" in client
-          and "creditLink:" in client)
+          0 < client.index("顺手留颗 Star") - client.index('key: "head"') < 900,
+          "（距离标题行 900 字符内）")
+    check("只有一句 —— 没有开发者署名那一行",
+          "开发者：" not in client,
+          "（用户明确要求去掉）")
+    check("只有一句 —— 没有第三行 CTA",
+          "行，给你一颗 Star" not in client,
+          "（原先是 starAsk + starCta 两行，现在合并成一句）")
+    check("没有多行容器样式残留（credit / creditLine 已清理）",
+          "creditLine" not in client and "styles.credit," not in client)
+    check("链接样式 creditLink 在（右对齐、不换行、不压缩）",
+          "creditLink:" in client and 'whiteSpace: "nowrap"' in client
+          and "flexShrink: 0" in client)
     check("外链带 rel=noreferrer（防 window.opener 泄漏）",
           '"noreferrer"' in client)
 
