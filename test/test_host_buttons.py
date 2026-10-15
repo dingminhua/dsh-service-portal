@@ -17,10 +17,19 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _expected_stamp():
-    """当前这份代码的指纹 = package.json 的版本号（宿主用同一个值）。"""
+    """当前这份代码的指纹，必须与 lib/index.js 里 CODE_STAMP 的算法一致。
+
+    算法：`<package.json 版本>+<lib/index.js 的 mtime 毫秒>+<字节数>`。
+    为什么不用纯版本号：实测踩过 —— 只把版本号从 0.7.5 提到 0.7.6，而宿主
+    内存里是"同版本、但没有新修复"的旧代码，守卫放行，于是过期代码被当成
+    产品失败报出来。指纹取自文件本身才认得出"代码改过了"。
+    """
+    lib = os.path.join(ROOT, "lib", "index.js")
     try:
         with open(os.path.join(ROOT, "package.json"), "r", encoding="utf-8") as fh:
-            return json.load(fh).get("version")
+            version = json.load(fh).get("version", "0.0.0")
+        info = os.stat(lib)
+        return "%s+%d+%d" % (version, int(info.st_mtime * 1000), info.st_size)
     except Exception:
         return None
 
