@@ -30,6 +30,7 @@ start_public_gui.py 是「先写死服务清单 -> 拉起 -> 建隧道」，改�
 import argparse
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -543,7 +544,11 @@ def run_portal(args):
         handler._send_json(404, {"ok": False, "error": "未知接口 %s" % route})
         return True
 
-    server = portal_proxy.make_portal_server(args.port, {
+    # 绑定端口这一步最容易被环境挡住，必须**明确报错并退出**，不能继续往下
+    # 打印「门户已启动」—— 那是最坏的一类 bug（不崩、只给错误答案：
+    # 界面显示成功，实际什么都没在听）。
+    try:
+        server = portal_proxy.make_portal_server(args.port, {
         "password": password,
         "cookie_secure": False,     # 内网是 http；公网经隧道是 https 也能用
         # 内网免密开关**动态可改**：设置页切「局域网访问密码」时立即生效，
@@ -558,7 +563,30 @@ def run_portal(args):
         "api_handler": api_handler,
         "resolve_upstream": resolve_upstream,
         "rate_limiter": portal_proxy.RateLimiter(),
-    })
+        })
+    except OSError as exc:
+        # WinError 10013 = 端口被系统保留（Hyper-V/WSL 的 excludedportrange）或
+        # 权限不足；10048 = 已被占用。两种情况都要给出可操作的提示。
+        winerr = getattr(exc, "winerror", None)
+        print("")
+        print("=" * 66, file=sys.stderr)
+        print("门户启动失败：无法绑定端口 %d" % args.port, file=sys.stderr)
+        print("=" * 66, file=sys.stderr)
+        print("原因：%s" % exc, file=sys.stderr)
+        if winerr == 10013:
+            print("", file=sys.stderr)
+            print("这是 Windows **保留端口**（Hyper-V / WSL / Docker 会成段预约）。", file=sys.stderr)
+            print("查一下 8899 是否落在保留段里：", file=sys.stderr)
+            print("    netsh interface ipv4 show excludedportrange protocol=tcp", file=sys.stderr)
+            print("换一个没被保留的端口即可，例如：", file=sys.stderr)
+            print("    python -X utf8 tools/portal_run.py --port 18899", file=sys.stderr)
+            print("也可以在 DSH 设置页把「门户端口」改成该端口。", file=sys.stderr)
+        elif winerr == 10048:
+            print("", file=sys.stderr)
+            print("端口已被占用。先停掉旧的门户：", file=sys.stderr)
+            print("    python -X utf8 tools/portal_run.py --stop", file=sys.stderr)
+            print("或换端口：--port 18899", file=sys.stderr)
+        return 3
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     # ---- 隧道（复用 start_tunnel_now，避免同一段逻辑写两份）----
@@ -649,22 +677,74 @@ def print_status():
     return 0
 
 
-def stop_all():
+def _pids_listening_on(port):
+    """找出正在监听该端口的进程 PID（用于清理状态文件丢失后的孤儿进程）。
+
+    只靠状态文件里的 pid 是不够的：状态文件可能被覆盖/删掉，或门户是被别的方式
+    起的（测试、手动运行），那时 --stop 会报「已停止」而进程还活着 —— 之后重新
+    开启就会撞端口。所以按端口兜底再扫一遍。
+
+    netstat 在中文 Windows 上输出的是 **GBK**（不是 UTF-8）：按 utf-8 解码会抛
+    UnicodeDecodeError，子进程的 reader 线程崩掉后 stdout 变成 None。所以这里
+    **不解析文本**：只看每行里是否出现 `:PORT` 与 `LISTENING`，再用正则取末尾数字。
+    """
+    pids = set()
+    if os.name == "nt":
+        try:
+            raw = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                                 capture_output=True, timeout=20).stdout or b""
+        except Exception:
+            return pids
+        text = raw.decode("utf-8", "replace")
+        needle = ":%d " % port
+        for line in text.splitlines():
+            if "LISTENING" not in line or needle not in line:
+                continue
+            match = re.search(r"(\d+)\s*$", line.strip())
+            if match:
+                pids.add(int(match.group(1)))
+    else:
+        try:
+            out = subprocess.run(["lsof", "-ti", "tcp:%d" % port],
+                                 capture_output=True, text=True, timeout=20).stdout or ""
+            pids.update(int(x) for x in out.split() if x.isdigit())
+        except Exception:
+            pass
+    return pids
+
+
+def stop_all(port=DEFAULT_PORTAL_PORT):
     state = load_state()
-    if not state:
-        print("门户未在运行。")
-        return 0
-    pid = state.get("portal_pid")
-    if pid:
+    killed = []
+    if state:
+        pid = state.get("portal_pid")
+        if pid:
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                   capture_output=True)
+                else:
+                    os.kill(pid, signal.SIGTERM)
+                killed.append(pid)
+            except Exception as exc:
+                print("停止 %s 失败：%r" % (pid, exc), file=sys.stderr)
+    # 兜底：按端口扫孤儿进程（状态文件丢了/换了端口的情况）
+    for pid in _pids_listening_on(port):
+        if pid in killed:
+            continue
         try:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                                capture_output=True)
             else:
                 os.kill(pid, signal.SIGTERM)
-            print("已请求停止门户进程 %s" % pid)
-        except Exception as exc:
-            print("停止失败：%r" % (exc,), file=sys.stderr)
+            killed.append(pid)
+        except Exception:
+            pass
+    if killed:
+        print("已停止门户进程 %s" % ", ".join(str(p) for p in killed))
+    else:
+        print("门户未在运行。")
     clear_state()
     return 0
 
@@ -694,7 +774,7 @@ def main(argv=None):
     if args.status:
         return print_status()
     if args.stop:
-        return stop_all()
+        return stop_all(args.port)
     return run_portal(args)
 
 

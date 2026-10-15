@@ -24,6 +24,9 @@ import { _internals, Config, name, apply } from "../lib/index.js";
 
 const { configOf, pythonFor, readStatus, portListening, passwordArgs } = _internals;
 
+/** 仓库根（用于按源码做启动方式回归）。 */
+const ROOT = resolve(import.meta.dirname, "..");
+
 /** 造一个假的**基础设施**仓库骨架（含 tools/start_public_gui.py 与 runs/）。 */
 function fakeRepo({ withScript = true, cred = null, state = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), "service-portal-test-"));
@@ -371,4 +374,59 @@ test("apply：webServer 不存在时不注册（headless fail-closed）", () => 
   };
   apply(ctx, { infraPath: "D:\\nonexistent", repoPath: "D:\\nonexistent", pythonPath: "", webEnabled: true });
   assert.equal(registered, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 启动方式回归（真 bug 固化）
+//
+// 拦的 bug：startPublic 曾经 await runProcess(...) 等门户进程**结束**。
+// 但门户是常驻进程（前台 serve_forever）永不退出 —— 于是：
+//   点「开启门户」→ 干等 240 秒 → 超时把它 kill 掉 → 用户看到「启动访问失败」。
+// 旧启动器（start_public_gui.py）起完就退，所以这个 bug 一直没暴露。
+//
+// 正确行为：分离启动 + 轮询端口。这里不起真进程（那是 acceptance 的活），
+// 只钉住「不能等它退出」这件事在源码里成立。
+// ---------------------------------------------------------------------------
+
+test("startPublic：门户是常驻进程，必须分离启动而不是等它退出", () => {
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const start = src.indexOf("async function startPublic");
+  assert.ok(start > 0, "找不到 startPublic");
+  const rest = src.slice(start);
+  const end = rest.indexOf("\nasync function stopPublic");
+  const body = end > 0 ? rest.slice(0, end) : rest;
+
+  assert.ok(body.includes("spawnDetached"),
+    "startPublic 必须用 spawnDetached（分离启动）");
+  assert.ok(!/await runProcess\(argv/.test(body),
+    "startPublic 不能 await runProcess(argv…) —— 那会等常驻进程退出并超时 kill 它");
+  assert.ok(body.includes("waitForPort"),
+    "startPublic 必须轮询端口判断启动成功（常驻进程没有退出码可用）");
+});
+
+test("startPublic：已在运行时直接返回，不重复起第二个", () => {
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const start = src.indexOf("async function startPublic");
+  const rest = src.slice(start);
+  const body = rest.slice(0, rest.indexOf("\nasync function stopPublic"));
+  assert.ok(body.includes("portListening(port)"),
+    "startPublic 必须先检查端口是否已在监听（幂等，避免撞端口/口令错位）");
+});
+
+test("portal_run：绑定端口失败必须明确退出，不能打印「门户已启动」", () => {
+  const src = readFileSync(join(ROOT, "tools", "portal_run.py"), "utf8");
+  assert.ok(src.includes("except OSError as exc"),
+    "portal_run.py 必须捕获绑定失败");
+  assert.ok(src.includes("10013"),
+    "必须对 WinError 10013（Windows 保留端口）给出可操作提示");
+  const bindTry = src.indexOf("server = portal_proxy.make_portal_server");
+  const successPrint = src.indexOf('print("门户已启动")');
+  assert.ok(bindTry > 0 && successPrint > bindTry,
+    "「门户已启动」必须在绑定成功之后才可能打印（否则就是「不崩、只给错误答案」）");
+});
+
+test("stop_all：状态文件丢了也要能按端口清理孤儿进程", () => {
+  const src = readFileSync(join(ROOT, "tools", "portal_run.py"), "utf8");
+  assert.ok(src.includes("_pids_listening_on"),
+    "stop_all 必须按端口兜底扫进程（否则状态文件丢了就停不掉）");
 });
