@@ -211,6 +211,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `tools/check_portal_shutdown.py` | 6 | 门户自退接口：局域网/公网来源必须被拒（不能从手机把门户关掉）、GET 不生效、**端口松了进程没退** |
 | `tools/check_plugin_stop.py` | 6 | 设置页「停止门户」真能停：**宿主派生进程杀不掉门户却报成功**（沙箱/作业隔离），改走"请门户自己退" |
 | `tools/check_portal_settings_forward.py` | 7 | 设置页局域网三项（总开关 / 口令开关 / 手动选地址）被宿主**静默忽略**：返回 ok:true、toast 说改了，门户其实一点没变 |
+| `tools/check_public_pin.py` | 18 | 公网密码自定义：**新密码真能登录、旧密码真的作废**（拿会话 cookie 当判据）、重启后仍在；安全负例：不能用局域网口令当公网密码、太短/空白被拒 |
 | `tools/check_portal_lan_pin.py` | 23 | 局域网口令刷新/自定义；**公网拿局域网口令能进来**（安全边界）、候选列表没落盘 |
 | `tools/check_portal_form.py` | 8 | **控制台表单提交被当成坏 JSON**（页面上点「添加服务」永远失败）、表单没有 key 字段导致必然失败 |
 | `tools/check_portal_tunnel.py` | 11 | **门户已在跑时「开启公网访问」什么都不做**（幂等检查把建隧道也跳过了）、「关闭公网」把整个门户停掉 |

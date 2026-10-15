@@ -100,6 +100,30 @@ def validate_password(password):
     return True
 
 
+def validate_public_pin(value):
+    """设置页「自定义公网密码」的门槛。返回**洗净后的口令**或抛 ValueError。
+
+    与 validate_password 分开的两个理由：
+      1. 那条是**启动路径**用的，报错文案是「拒绝启动：…」——在设置页里点保存
+         弹出"拒绝启动"会让用户以为门户要重启；这里必须是设置页的说法。
+      2. 这条要**返回口令本身**（调用方要拿去立即生效 + 落盘），而不是 True。
+
+    门槛 = 至少 MIN_PASSWORD_LEN（12）位。
+    **不限制字符种类**（纯数字也行）：用户要求"体验和局域网一样"，而局域网就是
+    手输数字；拦掉数字只会让他设不成自己想记的密码。公网比局域网更长这一点，
+    由长度门槛承担；风险由设置页的警示块明确告知，而不是替用户做绝对化的限制。
+    """
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("公网密码不能为空")
+    if len(text) < MIN_PASSWORD_LEN:
+        raise ValueError(
+            "公网密码至少 %d 位（当前 %d 位）—— 公网面向整个互联网，"
+            "比局域网口令（%d–%d 位）要求更长"
+            % (MIN_PASSWORD_LEN, len(text), LAN_PIN_MIN, LAN_PIN_MAX))
+    return text
+
+
 def password_matches(candidate, expected):
     """时序安全的口令比较。两边都编码成 bytes 再比，避免类型差异短路。"""
     if not isinstance(candidate, str) or not isinstance(expected, str):

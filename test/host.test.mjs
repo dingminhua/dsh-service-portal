@@ -591,6 +591,42 @@ test("readPortalStatus：未启动时手动选定的地址排在第一个", asyn
   }
 });
 
+test("readPortalStatus：透出 publicPinCustom（设置页据此显示「自定义/随机」）", async () => {
+  // 公网密码也能自定义（与局域网对称）。设置页要靠这个标记决定显示
+  // 「自定义」还是「本次随机」，以及要不要给「换回随机」出口。
+  const { server, port } = await listenOnFreePort();
+  const root = portalRepo({
+    portal_port: port,
+    lan_urls: [`http://192.168.71.10:${port}`],
+    public_url: `https://demo-${port}.trycloudflare.com`,
+    password: "custom-public-9x",
+    lan_password: "12345678",
+    public_pin_custom: true,
+    lan_pin_custom: false,
+  });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", port);
+    assert.equal(s.publicPinCustom, true, "自定义标记必须透出去");
+    assert.equal(s.lanPinCustom, false, "两个标记各自独立，不能串");
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readPortalStatus：状态里没写 publicPinCustom 时按 false（不是 undefined）", async () => {
+  // 反例控制：老状态文件没有这个字段。界面拿到 undefined 会把「本次随机」
+  // 渲染成空白 —— 兜底成 false 才有一致的默认（随机模式）。
+  const configured = await closedPort();
+  const root = portalRepo({ portal_port: configured, lan_urls: [] });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", configured);
+    assert.equal(s.publicPinCustom, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("readPortalStatus：真在监听时用状态文件里的地址（不做重算）", async () => {
   // 反例控制：运行中必须相信门户报出来的地址 —— 那时端口可能和配置不同
   // （门户支持 --port 覆盖），重算会得到一个错的地址。

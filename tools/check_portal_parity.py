@@ -223,7 +223,10 @@ def main():
     check("按来源选口令：内网用局域网口令、公网用公网口令",
           'kind in ("loopback", "lan") and lan_pin' in proxy)
     check("公网**不能**用局域网口令（安全边界）",
-          'expected = self.password' in proxy)
+          # 原来是钉字面量 `expected = self.password`；现在公网口令走 _password()
+          # 动态取（为了自定义后立即生效）。断言改成**语义**：公网分支取的必须是
+          # 公网口令，而不是局域网那条。
+          "expected = self._password()" in proxy and "self._password()" in proxy)
     check("启动时恢复上次的局域网口令（不是每次重启都换）",
           'saved.get("lan_password")' in run or '_saved_pw.get("lan_password")' in run)
     check("宿主把 lanPassword / lanPinCustom 透给设置页",
@@ -302,6 +305,53 @@ def main():
           by_key.get(("1.2.3.4:8899", "26.1.2.3")) == "public")
     check("畸形 Host 仍 fail-closed（public）",
           by_key.get(("garbage value", "")) == "public")
+
+    # ================= ④ 公网密码也能自定义（体验对齐局域网）=================
+    #
+    # 用户要求：「公网也要能设置自定义密码，体验和局域网一样，但是公网要有警告提示」，
+    # 并指定学习 dsh-pocket 的体验。这里钉住四件事，防止以后被改回去：
+    #   · 公网密码行有「自定义」入口（与局域网同一个位置/同一套交互）；
+    #   · 有「换回随机」出口（否则自定义之后是单向的，永远回不到自动轮换）；
+    #   · 公网有**成块的**风险警示（不是一行灰字 —— 一行会被略过）；
+    #   · 改了口令**立即生效**（走 provider，不重启门户 —— 重启会换域名）。
+    print("\n[④ 公网密码自定义 + 警告提示]")
+    check("公网密码行有「自定义」入口", 'setPubCustomOpen(true)' in client
+          and '"自定义"' in client)
+    check("有「换回随机」出口（自定义不是单向状态）",
+          'backToRandomPublic' in client and '"/public-pin/random"' in client)
+    check("公网自定义有独立输入态（不串到局域网那套）",
+          'pubCustomOpen' in client and 'pubCustomValue' in client
+          and 'customOpen' in client)
+    check("本地门槛与后端一致（≥12 位）",
+          "const PUBLIC_PIN_MIN = 12" in client
+          and "MIN_PASSWORD_LEN = 12" in login)
+    check("有**成块**的公网风险警示（warnBox，不是一行灰字）",
+          "warnBox:" in client and 'styles.warnBox' in client)
+    check("警示讲到了「拿到口令的人就能访问你开放的服务」",
+          "拿到口令的人就能访问你开放的服务" in client)
+    check("警示提醒了「地址会变 / 勿收藏」（学 dsh-pocket 的临时性警示）",
+          "请勿收藏" in client and "每次开启都会变" in client)
+    check("自定义输入态里也有警告（用户是在这里输入密码的）",
+          "公网密码会被互联网上的人尝试" in client)
+    check("改完立即生效（不要求重开公网）—— 文案说清",
+          "立即生效" in client)
+    check("宿主有转发路由 /public-pin/custom",
+          '"/public-pin/custom"' in host)
+    check("宿主有转发路由 /public-pin/random",
+          '"/public-pin/random"' in host)
+    check("门户侧用的是公网专用校验（不是启动路径那条）",
+          "validate_public_pin" in run and "validate_public_pin" in login)
+    check("公网口令走 provider（立即生效，不重启门户）",
+          "password_provider" in run and "password_provider" in proxy)
+    check("公网口令经密码比较（时序安全），不是明文直接比",
+          "password_matches(candidate, expected)" in proxy)
+    check("拒绝「公网密码 = 局域网口令」（不能把内网口令升级成公网凭据）",
+          "不能和局域网口令相同" in run)
+    check("自定义公网密码会落盘（重启不丢）",
+          '_internals' not in run and '"public_password"' in run
+          and '"public_password"' in run)
+    check("停止门户时保留公网自定义口令（KEEP_ON_STOP）",
+          '"public_password", "public_pin_custom"' in run)
 
     passed = sum(1 for ok in results if ok)
     print("\n设置页三处对齐控制检验：%d/%d" % (passed, len(results)))

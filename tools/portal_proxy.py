@@ -346,6 +346,10 @@ class PortalHandler(BaseHTTPRequestHandler):
     lan_password = ""
     # 动态 provider（可选）：设置页刷新/自定义内网口令后要立即生效，不重启门户。
     lan_password_provider = None
+    # 公网口令的动态 provider（可选）：设置页「自定义公网密码」后要**立即生效**，
+    # 不重启门户 —— 重启门户会换掉 trycloudflare 域名，代价太大（用户刚把地址
+    # 发出去就失效了）。与 lan_password_provider 同一套机制，对称。
+    password_provider = None
     secret = b""
     session_ttl = DEFAULT_SESSION_TTL
     cookie_secure = True
@@ -386,6 +390,20 @@ class PortalHandler(BaseHTTPRequestHandler):
             except Exception:
                 return ""
         return type(self).lan_password
+
+    def _password(self):
+        """当前公网口令（优先取动态 provider —— 设置页自定义后**立即生效**）。
+
+        为什么需要动态：自定义公网密码若要重启门户才生效，就会换掉隧道域名。
+        用户场景恰恰是"把地址发出去了，再改个记得住的密码"，重启等于把地址废掉。
+        """
+        provider = type(self).password_provider
+        if callable(provider):
+            try:
+                return str(provider() or "")
+            except Exception:
+                return ""
+        return type(self).password
 
     def _request_class(self):
         # 用户手动指定的局域网地址优先（见 resolve_request_kind 的说明）：
@@ -491,7 +509,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             expected = lan_pin
             expected_label = "局域网口令"
         else:
-            expected = self.password
+            expected = self._password()
             expected_label = "口令"
 
         if not expected or not password_matches(candidate, expected):
@@ -842,6 +860,7 @@ def make_portal_server(listen_port, config, listen_host="0.0.0.0"):
     """
     attrs = {
         "password": config.get("password", ""),
+        "password_provider": config.get("password_provider"),
         "lan_password": config.get("lan_password", ""),
         "lan_password_provider": config.get("lan_password_provider"),
         "secret": config.get("secret") or portal_login.gen_secret(),

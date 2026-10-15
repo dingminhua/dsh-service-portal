@@ -426,6 +426,17 @@ def run_portal(args):
     # 否则「重启后设置丢了」：用户明明在设置页选过网卡，重启又回到自动。
     saved = load_state() or {}
     saved_override = str(saved.get("lan_ip_override") or "").strip()
+    # 公网口令：可**运行期改**（设置页「自定义公网密码」），改完立即生效、
+    # 不重启门户 —— 重启会换掉 trycloudflare 域名。
+    #
+    # 只有「用户自定义过」（public_pin_custom）才沿用上次那份；否则必须用本次
+    # 启动的口令（随机模式下每次启动本来就该换新）。若不加这个条件，用户一次
+    # 自定义之后，随机模式永远换不回新口令了。
+    saved_public = str(saved.get("public_password") or "").strip()
+    if saved.get("public_pin_custom") and saved_public:
+        password = saved_public
+    write_password(password)
+
     runtime = {
         "lan_auth": bool(args.lan_auth) or bool(saved.get("lan_auth_enabled")),
         "lan_enabled": saved.get("lan_enabled") is not False,
@@ -433,6 +444,8 @@ def run_portal(args):
         # 局域网口令：上面已经算好（沿用上次自定义/刷新的值，没有就新生成）
         "lan_password": lan_password,
         "lan_pin_custom": bool(saved.get("lan_pin_custom")),
+        "password": password,
+        "public_pin_custom": bool(saved.get("public_pin_custom")) and bool(saved_public),
     }
 
     # ---- 门户回调 ----
@@ -467,7 +480,11 @@ def run_portal(args):
             "host_repo": host_repo,
             "lan_auth_enabled": bool(runtime["lan_auth"]),
             "lan_enabled": bool(runtime["lan_enabled"]),
-            "password": password,
+            # 公网口令：控制台与设置页都要显示它。**用 runtime 里的当前值**，
+            # 不是启动时那个局部变量 —— 自定义之后局部变量是旧的，界面就会
+            # 显示过期口令（用户拿它去登录必然失败）。
+            "password": runtime["password"],
+            "public_pin_custom": bool(runtime["public_pin_custom"]),
             # 局域网口令与「是否自定义」：控制台与设置页都要能显示/刷新它。
             # 内网免密时不返回它（那时它为空，显示出来反而误导用户以为要输）。
             "lan_password": runtime["lan_password"] if runtime["lan_auth"] else "",
@@ -712,6 +729,64 @@ def run_portal(args):
             handler._send_json(200, {"ok": True, "lan_password": value,
                                      "lan_pin_custom": True})
             return True
+        # ---- 公网口令：自定义（设置页「自定义公网密码」）----
+        #
+        # 体验与局域网对称（对齐 dsh-pocket issue #33：公网/局域网各自可设固定密码）。
+        # 关键差别在**安全门槛**：公网是对全互联网暴露的，所以这里比局域网严得多 ——
+        #   · 局域网：6–12 位**纯数字**（手机手输方便）；
+        #   · 公网：至少 12 位（MIN_PASSWORD_LEN），且不许用局域网那种短数字串。
+        # 内网口令绝不能拿来当公网凭据：局域网里任何人都可能知道它。
+        if method == "POST" and route == "/public-pin/custom":
+            data = parse_body(handler, body)
+            raw = str(data.get("value") or "").strip()
+            # 先查"是否等于局域网口令"再查长度门槛：局域网口令必然比公网门槛短
+            # （6–12 位 < 12 位门槛附近的边界），若先查长度，这条安全规则会被
+            # 长度规则先拦下、永远不触发 —— 那样它就是死代码，而用户看到的
+            # 报错也会是"太短"而不是真正的问题（你用了局域网口令）。
+            if raw and raw == str(runtime["lan_password"] or ""):
+                handler._send_json(400, {
+                    "ok": False,
+                    "error": "公网密码不能和局域网口令相同 —— 局域网口令会传给"
+                             "同一 WiFi 的设备，用它当公网凭据等于把内网口令公开",
+                })
+                return True
+            try:
+                value = portal_login.validate_public_pin(raw)
+            except ValueError as exc:
+                handler._send_json(400, {"ok": False, "error": str(exc)})
+                return True
+            runtime["password"] = value
+            runtime["public_pin_custom"] = True
+            write_password(value)
+            try:
+                st = load_state() or {}
+                st["public_password"] = value
+                st["public_pin_custom"] = True
+                save_state(st)
+            except OSError as exc:
+                handler._send_json(500, {"ok": False, "error": "写状态失败：%r" % exc})
+                return True
+            handler._send_json(200, {"ok": True, "password": value,
+                                     "public_pin_custom": True})
+            return True
+        if method == "POST" and route == "/public-pin/random":
+            # 回到随机轮换：换一个新的长随机口令，并取消"自定义"标记
+            # （否则下次开公网还是不再轮换，用户以为按钮坏了）。
+            value = portal_login.gen_password(12)
+            runtime["password"] = value
+            runtime["public_pin_custom"] = False
+            write_password(value)
+            try:
+                st = load_state() or {}
+                st["public_password"] = value
+                st["public_pin_custom"] = False
+                save_state(st)
+            except OSError as exc:
+                handler._send_json(500, {"ok": False, "error": "写状态失败：%r" % exc})
+                return True
+            handler._send_json(200, {"ok": True, "password": value,
+                                     "public_pin_custom": False})
+            return True
         if method == "POST" and route == "/tunnel/start":
             if public_url_holder["url"]:
                 handler._send_json(200, {"ok": True,
@@ -813,6 +888,9 @@ def run_portal(args):
         try:
             server = portal_proxy.make_portal_server(attempt_port, {
                 "password": password,
+                # 公网口令**动态可改**：设置页「自定义公网密码」后立即生效，
+                # 不重启门户（重启会换掉隧道域名 —— 用户刚发出去的地址就废了）。
+                "password_provider": lambda: runtime["password"],
                 # 内网口令**动态可改**：设置页刷新/自定义后立即生效，不用重启门户。
                 "lan_password_provider": lambda: runtime["lan_password"],
                 "cookie_secure": False,  # 内网是 http；公网经隧道是 https 也能用
@@ -1055,6 +1133,9 @@ def _pids_listening_on(port):
 KEEP_ON_STOP = (
     "lan_password", "lan_pin_custom", "lan_candidates", "lan_candidate_detail",
     "lan_ip_override", "lan_auth_enabled", "lan_enabled", "password_mode",
+    # 公网自定义口令也要留：用户特意设了记得住的密码，重启门户就丢回随机，
+    # 那"自定义"这个功能等于半废（他的手机/便签里存的是旧密码）。
+    "public_password", "public_pin_custom",
 )
 
 
