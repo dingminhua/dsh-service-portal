@@ -620,6 +620,34 @@ def run_portal(args):
         if method == "GET" and route == "/services":
             handler._send_json(200, {"ok": True, "services": console_state()["services"]})
             return True
+        if method == "GET" and route == "/discover":
+            # 自动发现：扫本机在听的端口，返回**带风险档**的候选（不写入任何东西）。
+            #
+            # 为什么放在门户这一侧、而不是宿主（Node）里去扫：这个能力属于
+            # 「门户管理自己代理的服务」，与注册表同源；放这里注册表数据就是
+            # 现成的（要排除已注册的端口），不必让宿主再取一遍。
+            #
+            # 安全：danger 档的候选（DSH 自身、代理、远程控制、系统服务）
+            # 只是"列出来 + 说明原因"，界面上默认不勾选，绝不一键添加。
+            registered = [e.get("target") or "" for e in registry.list()]
+            # 排除本项目自己的进程：门户端口 + cloudflared 隧道端口
+            # （20241 是实测的本机隧道端口；隧道端口会变，所以也按进程名兜底）
+            exclude = [args.port]
+            import portal_discover
+            try:
+                result = portal_discover.discover_services(
+                    portal_port=args.port,
+                    registered=registered,
+                    exclude_ports=exclude,
+                )
+            except Exception as exc:               # 发现失败不能拖垮门户
+                handler._send_json(500, {
+                    "ok": False,
+                    "error": "扫描失败：%r" % exc,
+                })
+                return True
+            handler._send_json(200, result)
+            return True
         if method == "GET" and route == "/state":
             handler._send_json(200, dict(console_state(), ok=True))
             return True

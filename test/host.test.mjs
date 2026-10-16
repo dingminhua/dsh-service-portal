@@ -591,6 +591,47 @@ test("readPortalStatus：未启动时手动选定的地址排在第一个", asyn
   }
 });
 
+test("readPortalStatus：透出服务清单（设置页据此管理服务，不必开控制台）", async () => {
+  // 用户要求：控制台的功能搬进插件设置 —— 刷新服务、增删启停、自动发现。
+  // 前提是宿主 /status 得把门户上报的服务清单带出去，否则面板拿不到数据。
+  const { server, port } = await listenOnFreePort();
+  const root = portalRepo({
+    portal_port: port,
+    lan_urls: [`http://192.168.71.10:${port}`],
+    services: [
+      { key: "a", name: "A", mount: "/a", target: "127.0.0.1:1", enabled: true, alive: true },
+      { key: "b", name: "B", mount: "/b", target: "127.0.0.1:2", enabled: true, alive: false },
+      { key: "c", name: "C", mount: "/c", target: "127.0.0.1:3", enabled: false, alive: false },
+    ],
+  });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", port);
+    assert.equal(s.services.length, 3, "三条服务都要透出去");
+    assert.equal(s.servicesAlive, true, "拿到过服务清单要标出来");
+    // 「开着但上游没响应」= 需要用户处理的那一类。只算 enabled && alive===false：
+    // 未启用的 C 不算（它本来就不该在跑）。
+    assert.equal(s.servicesDegraded, 1, "只数已启用但上游没响应的");
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readPortalStatus：门户没跑时服务清单是空数组（不是 undefined）", async () => {
+  // 反例控制：没在跑就没有"正在开放的服务"。面板拿到 undefined 会崩在
+  // .map() 上，拿到 [] 才能安全渲染"暂无服务"。
+  const configured = await closedPort();
+  const root = portalRepo({ portal_port: configured, lan_urls: [] });
+  try {
+    const s = await _internals.readPortalStatus(root, "D:\\x", configured);
+    assert.deepEqual(s.services, []);
+    assert.equal(s.servicesAlive, false);
+    assert.equal(s.servicesDegraded, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("readPortalStatus：透出 publicPinCustom（设置页据此显示「自定义/随机」）", async () => {
   // 公网密码也能自定义（与局域网对称）。设置页要靠这个标记决定显示
   // 「自定义」还是「本次随机」，以及要不要给「换回随机」出口。

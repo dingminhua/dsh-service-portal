@@ -367,12 +367,9 @@ def main():
     print("\n[⑤ 动作区排版：按钮与说明分层]")
     check("有专门的按钮行样式（动作不与说明混排）",
           "actionRow:" in client and "styles.actionRow" in client)
-    check("「打开控制台」的说明文字另起一行（不再挤在按钮右边）",
-          '"在控制台里添加服务、设置路由路径、逐个开关。"' in client
-          and "在控制台里添加服务、设置路由路径、逐个开关\"),\n      )," not in client)
     check("「停止门户」的后果说明另起一行",
           '"停止后内网 / 公网地址都会失效，设置与口令保留。"' in client)
-    check("门户进程那段有小标题（与「服务控制台」同级，读起来是两块）",
+    check("门户进程那段有小标题（与「服务」同级，读起来是两块）",
           '"门户进程"' in client)
     check("底部不再重复公网风险（与公网区块同主题，去重）",
           client.count("拿到口令的人可以启停你开放的服务") == 1)
@@ -383,6 +380,39 @@ def main():
           "⚠️ 公网暴露风险" not in client and "⚠ 公网开启后" not in client)
     check("底部警示只在「免密」时出现（跨区块的全局安全提示）",
           "if (running && lanAuth === false) {" in client)
+
+    # ================= ⑥ 控制台功能搬进设置页 =================
+    #
+    # 用户要求：「在插件设置里，能把控制台的功能做了吗？这样就不需要独立控制台了，
+    # 提供刷新当前系统服务、自动发现、手动添加某个服务这种功能」。
+    # 这里钉住四件事：能力都在、数据来自宿主、发现结果有安全分级、危险项默认不勾。
+    print("\n[⑥ 服务管理搬进设置页（替代独立控制台）]")
+    check("设置页有服务清单渲染（不再只是「打开控制台」入口）",
+          "styles.svc" in client and '"开放中的服务"' in client)
+    check("数据来自宿主 /status 的 services（不是面板自己再拉一份）",
+          "status.services" in client and "servicesDegraded" in host)
+    check("有「刷新」按钮", 'reloadServices' in client and '"刷新中…"' in client)
+    check("有「自动发现」按钮", 'runDiscover' in client and '"扫描中…"' in client)
+    check("有「手动添加」按钮与表单", 'submitAdd' in client
+          and '"手动添加"' in client and '"添加服务"' in client)
+    check("每个服务能启停/编辑/删除",
+          '"enable"' in client and '"disable"' in client
+          and '"update"' in client and '"delete"' in client)
+    check("删除有二次确认（不可撤销的动作）", "window.confirm" in client)
+    check("**危险候选默认不勾选**（实测有 DSH 自身/代理/远程控制）",
+          "c.level === \"ok\"" in client and "pre[c.port] = true" in client)
+    check("发现结果里危险项带原因、并被标「不建议」",
+          '"不建议"' in client and "c.reason" in client)
+    check("访问链接只在开着且上游活着时给（避免点了 502）",
+          "enabled && alive" in client)
+    check("上游未响应时直接告诉用户怎么办（不是只标个色）",
+          "点「访问」会失败" in client)
+    check("宿主有转发路由 /services/add", '"/services/add"' in host)
+    check("宿主转发服务动作（通配 enable/disable/delete/update/restart）",
+          "svcMatch" in host and '"restart"' in host)
+    check("宿主有转发路由 /discover", '"/discover"' in host)
+    check("宿主转发用的是只读 GET（自动发现不该改任何东西）",
+          "getPortalJson" in host)
 
     passed = sum(1 for ok in results if ok)
     print("\n设置页三处对齐控制检验：%d/%d" % (passed, len(results)))
