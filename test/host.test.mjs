@@ -15,7 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -143,7 +143,9 @@ test("默认值：repoPath 默认是空字符串（不预置作者本机路径�
 });
 
 test("默认值：运行期代码里不得把作者本机路径当**取值来源**", () => {
-  // 只查**发货的运行期代码**：lib/ 与 tools/。
+  // 覆盖面见下面 walk()：由 package.json 的 files 推导，另加 client/（客户端面
+  // 的来源）。**不查 .md** —— THIRD_PARTY_NOTICES / CHANGELOG 里出现来源仓库名与
+  // 历史路径是正当的溯源（RELEASING.md 还专门断言那个名字必须留在溯源声明里）。
   //
   // 断言的是「不得作为取值来源」，不是「不得出现这几个字」—— 以下三类出现是正当的，
   // 一刀切会把它们一起误伤（第一版就是这么写的，跑出来 5 条里 5 条都不该报）：
@@ -152,7 +154,9 @@ test("默认值：运行期代码里不得把作者本机路径当**取值来源
   //   · 文档字符串里的清单格式示例（"D:\\\\path\\\\to\\\\host"）
   // 所以判据是：这一行属于注释/文档字符串，或是环境变量缺省值里的系统路径。
   const offenders = [];
+  const scanned = new Set();          // 记录扫过的文件，供下面的覆盖面反向自检
   const scanFile = (rel) => {
+    scanned.add(rel);
     const lines = readFileSync(join(ROOT, rel), "utf8").split("\n");
     let inDoc = false;
     lines.forEach((line, i) => {
@@ -167,17 +171,77 @@ test("默认值：运行期代码里不得把作者本机路径当**取值来源
         .exec(line);
       if (!m) return;
       if (isDocLine) return;                      // 注释/举例：正当
-      // 环境变量缺省值里的系统路径：正当（Windows 的 ProgramFiles / SystemRoot）。
-      // 可能跨行 —— 往前看 3 行里有没有 `os.environ.get(`（括号还没闭合）。
-      const near = lines.slice(Math.max(0, i - 3), i + 1).join("\n");
-      if (/os\.environ\.get\([^)]*,/.test(near) && (near.match(/\(/g) || []).length
-          > (near.match(/\)/g) || []).length - 1) return;
+      // 环境变量缺省值里的系统路径：正当。两种写法都要放行 ——
+      //   Python: os.environ.get("SystemRoot", r"C:\Windows")
+      //   Node:   process.env.ProgramFiles || "C:\\Program Files"
+      // 都是「取系统目录，取不到才用平台缺省」，不是把某个人的仓库路径写死。
+      const envFetch = /os\.environ\.get\(|process\.env[\[.]/.test(line)
+        || /os\.environ\.get\(|process\.env[\[.]/.test(
+          lines.slice(Math.max(0, i - 3), i).join("\n"));
+      if (envFetch) {
+        const before = line.slice(0, m.index);
+        // 紧跟在 `|| ` 之后（Node 兜底），或所在调用的括号还没闭合（Python 跨行）
+        if (/\|\|\s*$/.test(before)) return;
+        const near = lines.slice(Math.max(0, i - 3), i + 1).join("\n");
+        if ((near.match(/\(/g) || []).length > (near.match(/\)/g) || []).length) {
+          return;
+        }
+      }
       offenders.push(`${rel}:${i + 1} -> ${m[1]}`);
     });
   };
-  scanFile("lib/index.js");
-  for (const f of readdirSync(join(ROOT, "tools"))) {
-    if (f.endsWith(".py")) scanFile(`tools/${f}`);
+  // 覆盖面必须是**全部随包分发的代码**，不只 lib/index.js 与 tools/*.py。
+  // 第一版只扫了这两处，实测漏了两类真问题：
+  //   · lib/client.js —— 客户端面同样发货（由 client/index.jsx 构建而来），
+  //     在它里面写死路径一样会泄；
+  //   · tools 里的 .mjs —— probe_button_e2e.mjs 就硬编码过 Chrome 的 Windows 路径。
+  // 所以扫描集**从 package.json 的 files 白名单推导**（而不是硬编码目录名）：
+  // files 里每个「目录」都递归扫，另加 client/（它是发货的客户端面的**来源**，
+  // 只扫构建产物会在源码阶段漏掉）。
+  const CODE_EXT = /\.(js|mjs|cjs|jsx|py)$/;
+  const { files: shipped } = JSON.parse(
+    readFileSync(join(ROOT, "package.json"), "utf8"));
+  const walk = (relDir) => {
+    for (const ent of readdirSync(join(ROOT, relDir), { withFileTypes: true })) {
+      const rel = `${relDir}/${ent.name}`;
+      if (ent.isDirectory()) walk(rel);
+      else if (CODE_EXT.test(ent.name)) scanFile(rel);
+    }
+  };
+  for (const entry of shipped) {
+    let isDir = false;
+    try { isDir = statSync(join(ROOT, entry)).isDirectory(); } catch { isDir = false; }
+    if (!isDir) continue;                    // 单个文件（README/LICENSE…）不是代码
+    walk(entry);
+  }
+  // client/ 永远扫：它是 files 里 lib/client.js 的来源。
+  if (existsSync(join(ROOT, "client"))) walk("client");
+
+  // 反向自检：扫描集必须真的覆盖到这些关键文件。
+  // 为什么需要这条：覆盖面是从 files 推导的，所以「新增了目录却没扫到」那种
+  // 情况**永远不会**被下面的 uncovered 断言抓到（推导即覆盖，是条恒真断言）。
+  // 真正会发生的退化是反过来 —— 有人把扫描收窄成硬编码的几个文件，于是
+  // lib/client.js / *.mjs 重新变成盲区。用一份显式的关键文件清单钉住覆盖面，
+  // 收窄扫描就会在这里失败（已实测：把 walk 换成只扫 lib/index.js，本条即红）。
+  const REQUIRED_SCANNED = [
+    "lib/index.js", "lib/client.js", "client/index.jsx",
+    "tools/portal_run.py", "tools/start_public_gui.py",
+    "tools/probe_button_e2e.mjs",
+  ];
+  const missing = REQUIRED_SCANNED.filter((f) => !scanned.has(f));
+  assert.deepEqual(missing, [],
+    "扫描器没有覆盖这些发货/来源代码文件，覆盖面被收窄了：\n  "
+    + missing.join("\n  "));
+
+  // 更强的兜底：作者的宿主仓库目录名**整棵代码树里一次都不许出现**（含注释）。
+  // 上面那条只拦「非注释行里的绝对路径字面量」，注释里写全路径它不管；
+  // 而 0.8.7 之后注释里也已经不再需要提那个路径（历史细节放 CHANGELOG）。
+  // 这条把标准钉死，防止日后又有人图省事在注释里贴本机路径。
+  for (const rel of scanned) {
+    const text = readFileSync(join(ROOT, rel), "utf8");
+    assert.ok(!text.includes("DshProject"),
+      `发货代码 ${rel} 里出现了作者的本机目录名 DshProject（应改为中性描述，`
+      + "历史细节写进 CHANGELOG）");
   }
   assert.deepEqual(offenders, [],
     "运行期代码把绝对路径当取值来源了（会泄路径 / 换台机器就废）：\n  "

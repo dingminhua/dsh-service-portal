@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.8.8 (2026-10-16)
+
+接 0.8.7。0.8.7 自己新加的那条「不得把作者本机路径当取值来源」的检验，**覆盖面有洞**，
+发出去之后复核时发现，本版本把它补上并清掉漏网的实例。
+
+### Fixes
+
+- **`tools/probe_button_e2e.mjs` 的 Chrome 路径改为按平台探测**。
+  与 0.8.7 修掉的 `shoot_portal.py` 是同一类问题（原本写死
+  `C:\Program Files\Google\Chrome\Application\chrome.exe`，只有作者的 Windows 机器成立）。
+  新增 `findChrome()`：`--chrome` > `$CHROME` > 按 `process.platform` 找常见安装位置；
+  都找不到时**返回退出码 2**（跳过），而不是拿着不存在的路径去 spawn 再报一句看不懂的错。
+
+### Tests
+
+- **扫描覆盖面改由 `package.json` 的 `files` 推导**（递归 + 另扫 `client/`），
+  不再硬编码 `lib/index.js` + `tools/*.py`。实测原覆盖面漏了两类真问题：
+  - `lib/client.js` —— 客户端面同样发货，在它里面写死路径一样会泄；
+  - `tools` 里的 `.mjs` —— `probe_button_e2e.mjs` 的 Chrome 路径正是从这里漏掉的。
+
+  三个方向都证伪过：往 `lib/client.js` 贴路径 → 红；往 `client/index.jsx` 贴路径 → 红；
+  把扫描收窄回只扫 `lib/index.js` → 由新增的 `REQUIRED_SCANNED` 覆盖自检拦下 → 红。
+
+- **加一条更狠的兜底**：作者的宿主仓库目录名（`DshProject`）在**整棵被扫代码树里
+  一次都不许出现**，含注释。原判定只拦「非注释行里的绝对路径字面量」，注释里写全路径
+  它放行 —— 而 0.8.7 起注释里其实已经不需要提那个路径了。已把 `lib/index.js` /
+  `tools/portal_run.py` 两处注释改成中性描述（历史细节留在 CHANGELOG）。
+  证伪：往注释里贴 `D:\DshProject\...` → 该条即红。
+
+- 修正 0.8.7 一节的一处**说满的话**：那里写「改判据后只揪出 1 条真问题」，
+  实际是扫描器当时只扫了 `lib/index.js` + `tools/*.py`，所以只看见 1 条；
+  扩面后又揪出 `probe_button_e2e.mjs`（本节修复）。
+
+### Docs
+
+- `RELEASING.md` 增加发货前守卫：`lib/ tools/ client/` 里不得出现 `DshProject`，
+  且 `client/` 必须被扫描覆盖。
+
 ## 0.8.7 (2026-10-16)
 
 用户：「把默认值改为空值，再发布」。

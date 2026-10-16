@@ -100,6 +100,23 @@ npm pack --dry-run 2>&1 | grep -E "tools/(portal_run|start_public_gui)\.py"   # 
 npm pack --dry-run 2>&1 | grep -c "tools/.*\.py"                              # 应 ≥ 8（运行期 import 闭包）
 ```
 
+> 上面两条都可证伪：把 `files` 里的 `tools` 删掉（正是 v0.8.6 的缺陷形状），
+> 第一条变空、第二条变 `0`。
+
+⚠️ **发布前还要确认包里没有作者的本机路径**。`repoPath` / `host_repo` 的默认值
+曾经是作者 Windows 机器上的宿主仓库绝对路径 —— 它对任何别人都不成立，却因为界面
+不报错而让用户**误以为装完即可用**。v0.8.7 起默认值为空，v0.8.8 起连注释里都不留：
+
+```bash
+# 发货代码（含注释）里不得出现作者的本机目录名；历史细节只写在 CHANGELOG
+grep -rn "DshProject" lib/ tools/ client/ && echo "✗ 泄漏了作者本机路径" || echo "✓ 干净"
+# 扫描覆盖面必须含客户端面的来源（只扫 lib/index.js 会漏 client/ 与 *.mjs）
+test -f client/index.jsx && grep -q 'walk("client")' test/host.test.mjs && echo "✓ client/ 在覆盖面内"
+```
+
+（这两条的真检验在 `test/host.test.mjs` 的「运行期代码里不得把作者本机路径当取值来源」
+一条里，覆盖面由 `package.json` 的 `files` 推导；上面的 shell 版只是发布前的快速自查。）
+
 ### 8. 创建 GitHub Release
 
 ```bash

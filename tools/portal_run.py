@@ -58,9 +58,9 @@ HEALTH_PATH = "/_auth/health"
 DEFAULT_PORTAL_PORT = 8899
 TUNNEL_LOG = "cloudflared.log"
 # 宿主仓库（被开放的服务本体所在）：**默认为空 —— 故意不猜**。
-# 这里曾经写死作者本机的 r"D:\DshProject\ld-rl-poker"，那是「第一用户」的路径，
-# 对任何别人都不成立，而且会让人误以为装完即可用。留空由用户指定
-# （--host-repo、SERVICE_HOST_REPO 环境变量，或设置页的 repoPath）。
+# 这里曾经写死作者本机的宿主仓库绝对路径（来龙去脉见 CHANGELOG 的 0.8.7 一节），
+# 那是「第一用户」的路径，对任何别人都不成立，而且会让人误以为装完即可用。
+# 留空由用户指定（--host-repo、SERVICE_HOST_REPO 环境变量，或设置页的 repoPath）。
 #
 # 注意：本文件里 host_repo **只写进状态给界面显示**（见下方 status 字典），
 # 服务清单是走 runs/portal_registry.json 的，不依赖它 —— 所以留空不影响启动。

@@ -17,10 +17,41 @@ const getArg = (name, dflt) => {
 };
 const URL_ = getArg("--url", "http://127.0.0.1:8899/");
 const CDP_PORT = Number(getArg("--cdp-port", "9333"));
-const CHROME = getArg(
-  "--chrome",
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-);
+
+// 浏览器可执行文件：--chrome 优先，其次 $CHROME，再次按平台找常见安装位置。
+// 这里原本写死 "C:\Program Files\Google\Chrome\Application\chrome.exe" ——
+// 只有作者的 Windows 机器成立，与本仓库 tools/shoot_portal.py 是同一类问题，
+// 两处现在都按平台探测（优先级一致）。本文件是 ESM，用 dynamic import。
+async function findChrome() {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const env = process.env.CHROME;
+  if (env && fs.existsSync(env)) return env;
+  const candidates = process.platform === "darwin"
+    ? [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    ]
+    : process.platform === "win32"
+      ? [
+        path.join(process.env.ProgramFiles || "C:\\Program Files",
+          "Google\\Chrome\\Application\\chrome.exe"),
+        path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
+          "Google\\Chrome\\Application\\chrome.exe"),
+        path.join(process.env.LOCALAPPDATA || "",
+          "Google\\Chrome\\Application\\chrome.exe"),
+      ]
+      : ["/usr/bin/google-chrome", "/usr/bin/chromium",
+        "/usr/bin/chromium-browser", "/snap/bin/chromium"];
+  return candidates.find((p) => p && fs.existsSync(p)) || null;
+}
+
+const CHROME = getArg("--chrome", await findChrome());
+if (!CHROME) {
+  console.error("找不到无头浏览器。用 --chrome 指定可执行文件，或设环境变量 CHROME。");
+  process.exit(2);
+}
 
 const { spawn } = await import("node:child_process");
 const os = await import("node:os");
