@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.8.6 (2026-10-16)
+
+发布前核查 awesome-dsh-plugin 收录要求时，查出**发布通道上一个致命缺陷**，
+以及两处不合规声明。都不影响本地 `link:` 开发形态 —— 这正是它们一直没被发现的原因。
+
+### Fixes
+
+- **npm 包缺少 `tools/`，装到用户机器上根本起不来（发布通道致命）**。
+  `package.json` 的 `files` 白名单里没有 `tools`，于是 `npm pack` / `npm publish`
+  打出来的包里**一个 Python 脚本都没有**（11 个文件、286 kB，全是 lib/ 与文档）。
+  而 `lib/index.js` 是靠 `infraPath/tools/portal_run.py` 启动门户的。
+
+  实测（装 tarball 后读状态）：
+
+  ```
+  找不到 .../node_modules/dsh-service-portal/tools/start_public_gui.py
+  （外网启动器不在该仓库，或 infraPath 配错）
+  ```
+
+  即：用户 `dsh plugin add dsh-service-portal` 装完，点「开启」必然失败。
+
+  **为什么此前没暴露**：唯一验证过的安装方式是 `link:` 本地链接 ——
+  符号链接指向真实仓库，`tools/` 一直在。开发形态恰好是唯一不暴露问题的形态。
+  修法：`files` 加 `"tools"`，并补打包契约断言（见下）。
+
+- **`@deepseek-ai/cordis` 的 peer 范围是 `>=4`，会静默排除所有预发布版**。
+  node-semver 只在范围里**某个比较符**与该版本的 `major.minor.patch` 元组完全一致、
+  且自身带预发布标签时才放行预发布版，所以 `>=4` 匹配不到 `4.0.5-alpha.1` /
+  `4.0.5-alpha.2`，用户在预发布版 harness 上装会撞 `ERESOLVE`。改成
+  contributing.md 给出的显式 `||` 分支写法：
+
+  ```jsonc
+  "@deepseek-ai/cordis": ">=4.0.1-rc.1 <4.0.5-0 || >=4.0.5-alpha.1 <5.0.0-0"
+  ```
+
+  用**两段式**而不是逐个枚举预发布版：`4.0.5-alpha.3`、`4.0.5-rc.1` 这类将来发布
+  的新预发布版会被自动吸收，不必再改 package.json（逐个枚举的写法在上游发新预发布版
+  时会重新变成「静默排除」）。已验证放行 cordis 全部 9 个已发布版本、拒绝 `5.x`。
+
+- **`@deepseek-ai/schemastery` 改为「peer 声明 + dependencies 兜底」**。
+
+  原来只在 `dependencies` 里 pin 死了 `3.18.4`，不合规（contributing.md 要求官方包
+  声明为 `peerDependencies`，否则可能与宿主装出两份实例）。
+
+  ⚠️ **但只改成 peer 是错的 —— 这一步差点把插件改坏，必须记下来。**
+  本仓库把 schemastery 标成 `optional` peer，而 pnpm 会**直接跳过** optional peer，
+  一个都不装。于是：
+
+  ```
+  profile vp-a：仅 peer 声明，无 dependencies 兜底
+    node_modules/ 下只有 dsh-service-portal
+    -> import "@deepseek-ai/schemastery" ERR_MODULE_NOT_FOUND，插件整个加载不了
+  profile vp-b：peer 声明 + dependencies 兜底
+    node_modules/ 下出现 @deepseek-ai/schemastery -> 加载成功
+  ```
+
+  **是 `dsh plugin add` 实装进一次性 profile 才查出来的**：76 项单测当时全绿，
+  因为单测跑在开发检出上，本地 node_modules 里那份一直在 —— 与上面 Defect A
+  同一种「开发形态恰好看不见」的陷阱，同一个发布日里踩了两次。
+
+  最终形态为两者并存（peer 让宿主已有的那份可被复用，dependencies 保证宿主没提供时
+  也能跑），与已收录的 `DDDMUC/dsh-free-search` 同形：
+
+  ```jsonc
+  "peerDependencies": { "@deepseek-ai/schemastery": ">=3.18.1-rc.1 <3.18.5-0 || >=3.18.5-alpha.1 <4.0.0-0" },
+  "dependencies":     { "@deepseek-ai/schemastery": ">=3.18.4 <3.18.5-0 || >=3.18.5-alpha.1 <4.0.0-0" }
+  ```
+
+### Features
+
+- 新增 9 条**打包契约**控制检验（`test/client.test.mjs`，19 → 28 项）：
+  - `tools/` 必须在 `files` 白名单里
+  - 两个运行期入口脚本必须存在
+  - `portal_run.py` 的本地 import 闭包 8 个文件必须齐全
+  - `files` 白名单每一项都必须真实存在（写错名字会被 npm 静默忽略）
+  - 官方 `@deepseek-ai/*` 必须声明为 `peerDependencies`
+  - `schemastery` 必须在 `dependencies` 里有兜底（上面那次事故的正面断言）
+  - `cordis` peer 范围必须放行全部已发布版本、且拒绝 `5.x`
+  - `schemastery` peer 范围必须放行全部已发布版本、且拒绝 `4.x`
+  - **产物里每个 bare import 都必须有对应声明** —— 这条是那次事故的通用化收口：
+    静态解析 `lib/index.js` / `lib/client.js` 的 import，逐个要求能在
+    `dependencies`/`peerDependencies` 里找到归属，相对导入必须真实存在。
+    今后任何「加了 import 却忘了声明依赖」都会当场失败。
+
+  每条都用**退回旧写法**验过会失败（可证伪，不是装饰）。
+
+- 新增 `test/lib/semver-range.mjs`：极简 semver 判定器，用于 peer 范围断言。
+  不引第三方测试依赖（CI 只装 schemastery），且**认不出的语法一律抛错**，
+  而不是「看着像就放行」——`>=4`、`^3.18.4`、`4.x` 都会直接抛错。
+  已与真 `semver` 对比 **144 组用例、0 处差异**。
+
+### Docs
+
+- 修正测试数字漂移：README 两处「24 / 17 项」与「46 项」→ 实测 **50 / 28 项**；
+  README.en.md 同步；RELEASING.md 的「18 / 14 项」→ **50 / 28 项**。
+- README / README.en.md 的控制检验概述改为与仓库实际一致
+  （26 个 Python 控制检验脚本 + 8 个端到端脚本 + 78 项 Node 检验）。
+- 新增「界面」章节与截图：`docs/assets/` 三张（窄屏浅色 / 窄屏深色 / 宽屏）
+  由 `tools/shoot_portal.py` 用**真门户进程 + 无头浏览器**实拍；根目录
+  `screenshots.json` 按注册表约定声明（awesome-dsh-plugin 推荐项）。
+
 ## 0.8.5 (2026-10-16)
 
 用户：「访问页我看也没有符合要求变成一个只读的测试页，并且这个页面也需要美化，

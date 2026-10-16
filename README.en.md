@@ -41,9 +41,19 @@ portal itself has nothing to do with poker — **any local service** can use the
   (`https://<random>/train/`).
 - **Manifest-driven** — write `services.json` to expose any service without touching code; an empty
   manifest falls back to the built-in default (ld-rl-poker's two GUIs, backwards compatible).
-- **Control checks** (house rule) — 35 tunnel-auth, 10 domain, 23+23 host-metrics, 26 plugin-contract
-  checks; **a missing dependency must "skip and return 2", never silently pass**.
+- **Control checks** (house rule) — 26 Python control-check scripts plus 8 end-to-end scripts, and 78
+  Node checks; **a missing dependency must "skip and return 2", never silently pass**.
 - **Host metrics** — CPU / memory / VRAM / GPU utilization; unreadable values render "—", never a fake 0.
+
+## Screenshots
+
+The portal page (what you get after scanning the QR code — read-only: test + guide).
+Captured from a real portal process with headless Chrome via `tools/shoot_portal.py`,
+not design mockups.
+
+| Phone (light) | Phone (dark) | Wide |
+| :---: | :---: | :---: |
+| <img src="docs/assets/portal-phone.png" width="220" alt="portal page, phone, light"> | <img src="docs/assets/portal-phone-dark.png" width="220" alt="portal page, phone, dark"> | <img src="docs/assets/portal-wide.png" width="420" alt="portal page, wide"> |
 
 ## How it works
 
@@ -187,8 +197,8 @@ python -X utf8 tools\check_plugin.py
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 24 host-side control checks
-& $node --test test/client.test.mjs    # 17 client distribution contract checks
+& $node --test test/host.test.mjs      # 50 host-side control checks
+& $node --test test/client.test.mjs    # 28 client distribution contract checks
 
 # End-to-end acceptance: launches the real portal process and verifies
 # LAN-is-free / public-needs-password / console-manages-services / rate limit / health

@@ -18,6 +18,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { satisfies as semverSatisfies } from "./lib/semver-range.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -73,6 +74,206 @@ test("dsh 声明：bundle.patch 指向存在的 cordis.patch.yml", () => {
 
 test("dsh 声明：client.platform 是 web", () => {
   assert.equal(pkg.dsh?.client?.platform, "web");
+});
+
+// ---------------------------------------------------------------------------
+// 打包契约：**运行期脚本必须随包分发**。
+//
+// 血的教训（2026-10-16 实测）：package.json 的 files 白名单里没有 "tools"，
+// 于是 `npm pack` / `npm publish` 打出来的包里**一个 Python 脚本都没有**。
+// 装到用户机器上以后，lib/index.js 去 infraPath/tools 找 portal_run.py 全部落空：
+//
+//   readStatus -> "找不到 .../tools/start_public_gui.py（外网启动器不在该仓库）"
+//   点「开启」 -> startPublic 拿不到脚本，门户永远起不来
+//
+// 而 link: 本地安装（开发形态）**看不到**这个 bug —— 符号链接指向真实仓库，
+// tools/ 一直在。这就是它一直没被发现的全部原因：唯一验证过的安装方式恰好是
+// 唯一不暴露问题的安装方式。所以这条断言按「打包后的形状」检查，不按开发检出。
+//
+// 同时钉住 files 白名单里的每一项都真实存在（写错目录名的白名单条目在
+// npm 眼里是静默忽略，不报错）。
+// ---------------------------------------------------------------------------
+
+test("打包契约：tools/ 在 files 白名单里（否则发布包没有运行期脚本）", () => {
+  assert.ok(Array.isArray(pkg.files), "package.json 缺 files 白名单");
+  assert.ok(pkg.files.includes("tools"),
+    "files 白名单缺 tools —— npm 包不会带任何 Python 脚本，"
+    + "用户装完点「开启」必然失败。实际=" + JSON.stringify(pkg.files));
+});
+
+test("打包契约：运行期脚本两个入口都在仓库里（打包前必须存在）", () => {
+  // 这两个是 lib/index.js 会去 infraPath/tools 里找的入口：
+  //   portal_run.py       新门户（控制台形态），优先
+  //   start_public_gui.py  旧启动器，回退
+  for (const rel of ["tools/portal_run.py", "tools/start_public_gui.py"]) {
+    assert.ok(existsSync(join(ROOT, rel)), `运行期脚本缺失：${rel}`);
+  }
+});
+
+test("打包契约：运行期脚本的本地 import 闭包都在 tools/ 里", () => {
+  // portal_run.py 用 `import portal_proxy` 这种**同目录裸模块名**导入兄弟脚本
+  // （靠 sys.path.insert(0, HERE)）。少发任何一个，门户就在运行期 ImportError，
+  // 而打包产物本身看不出这个问题。这里按闭包逐个钉住。
+  const closure = [
+    "portal_run.py", "portal_console.py", "portal_proxy.py", "portal_registry.py",
+    "portal_login.py", "lan_address.py", "start_public_gui.py", "tunnel_auth.py",
+  ];
+  for (const rel of closure) {
+    assert.ok(existsSync(join(ROOT, "tools", rel)),
+      `tools/${rel} 缺失 —— portal_run.py 的 import 闭包不完整`);
+  }
+});
+
+test("打包契约：files 白名单里每一项都真实存在（写错名字会被静默忽略）", () => {
+  const missing = pkg.files.filter((f) => !existsSync(join(ROOT, f)));
+  assert.deepEqual(missing, [],
+    "files 白名单里有不存在的条目（npm 会静默忽略，不会报错）："
+    + JSON.stringify(missing));
+});
+
+test("打包契约：官方 @deepseek-ai 包必须声明为 peerDependencies", () => {
+  // contributing.md：官方 @deepseek-ai/* 包请用 peerDependencies 声明。
+  // 声明成 peer 才能和宿主共用同一份实例（否则会装出第二份宿主内部包）。
+  for (const name of ["@deepseek-ai/cordis", "@deepseek-ai/schemastery"]) {
+    assert.ok(pkg.peerDependencies?.[name],
+      `${name} 必须声明为 peerDependencies（contributing.md 明确要求）`);
+  }
+});
+
+test("打包契约：schemastery 必须在 dependencies 里有兜底（否则新装用户插件加载不了）", () => {
+  // 这条是**实测出来的**，不是推演出来的。
+  //
+  // lib/index.js 第一行就 `import z from "@deepseek-ai/schemastery"`，所以它是
+  // **硬依赖**，装不上就直接 ERR_MODULE_NOT_FOUND、插件整个加载失败。
+  //
+  // 但只声明成 peer 是不够的：本仓库 peerDependenciesMeta 把 schemastery 标成了
+  // optional，而 pnpm 会**直接跳过** optional peer —— 一个都不装。实测（真 dsh CLI
+  // 装进一次性 profile）：
+  //
+  //   profile vp-a：peer 声明 + 无 dependencies 兜底
+  //     node_modules/ 下只有 dsh-service-portal 一个包 -> 插件加载 ERR_MODULE_NOT_FOUND
+  //   profile vp-b：peer 声明 + dependencies: ^3.18.4 兜底
+  //     node_modules/ 下出现 @deepseek-ai/schemastery -> 加载成功、readStatus ok
+  //
+  // 所以两者都要：peer 让宿主已有的那份可被复用（不装第二份），
+  // dependencies 保证在宿主没提供时也一定能跑。已收录的 DDDMUC/dsh-free-search
+  // 就是同一种写法（peer ^3.18.4 + deps ^3.18.4）。
+  const peer = pkg.peerDependencies?.["@deepseek-ai/schemastery"];
+  const dep = pkg.dependencies?.["@deepseek-ai/schemastery"];
+  assert.ok(peer, "缺 peer 声明（contributing.md 要求）");
+  assert.ok(dep,
+    "缺 dependencies 兜底 —— optional peer 会被 pnpm 跳过，"
+    + "新装用户 node_modules 里不会有 schemastery，插件加载即失败");
+  // 兜底范围必须真能匹配已发布的稳定版，否则等于没兜底
+  assert.ok(semverSatisfies("3.18.4", dep),
+    `dependencies 兜底范围必须放行 3.18.4（当前稳定版）；实际=` + dep);
+
+  // 声明了还不够 —— 真解析一次，证明装得上
+  const resolved = createRequire(join(ROOT, "package.json")).resolve(
+    "@deepseek-ai/schemastery");
+  assert.ok(existsSync(resolved),
+    "@deepseek-ai/schemastery 解析不到实际文件：" + resolved);
+});
+
+test("打包契约：cordis peer 范围必须放行预发布版（含显式 || 分支）", () => {
+  // contributing.md 的重点警告：node-semver 只有当范围里**某个比较符**与该版本的
+  // major.minor.patch 元组完全一致、且自身带预发布标签时，才放行预发布版本。
+  // 所以 ">=4" 这种看起来宽松的写法会静默排除 4.0.5-alpha.1，用户装的时候撞 ERESOLVE。
+  //
+  // 这里不看字符串像不像，而是**直接拿 semver 判**：npm 自己有一份 semver 依赖，
+  // 用它跑真实的 satisfies()，才算真验过（否则正则写对、行为仍错也照样绿）。
+  const range = pkg.peerDependencies?.["@deepseek-ai/cordis"];
+  assert.ok(range, "缺 @deepseek-ai/cordis 的 peerDependencies");
+
+  // 实测已发布的 cordis 版本（npm view @deepseek-ai/cordis versions）
+  const published = [
+    "4.0.1-rc.1", "4.0.1-rc.4", "4.0.1", "4.0.2", "4.0.3", "4.0.4",
+    "4.0.5-alpha.1", "4.0.5-alpha.2", "4.0.5",
+  ];
+  const excluded = published.filter((v) => !semverSatisfies(v, range));
+  assert.deepEqual(excluded, [],
+    "peer 范围静默排除了已发布的 cordis 版本（用户会撞 ERESOLVE）："
+    + JSON.stringify(excluded) + "；范围=" + range);
+
+  // 预发布版也不能漏：宿主自己就可能是预发布构建
+  assert.ok(semverSatisfies("4.0.5-alpha.1", range),
+    "范围必须放行 4.0.5-alpha.1（宿主实际在用预发布构建）；范围=" + range);
+  // 同时不能把下一个大版本放进来
+  for (const v of ["5.0.0", "5.0.0-alpha.1"]) {
+    assert.ok(!semverSatisfies(v, range),
+      `范围不该放行 ${v}（跨大版本会被静默装上不兼容的宿主）；范围=` + range);
+  }
+});
+
+test("打包契约：schemastery peer 范围必须放行全部已发布版本", () => {
+  const range = pkg.peerDependencies["@deepseek-ai/schemastery"];
+  const published = [
+    "3.18.1-rc.1", "3.18.1-rc.4", "3.18.1", "3.18.2", "3.18.3", "3.18.4",
+    "3.18.5-alpha.1", "3.18.5-alpha.2", "3.18.5",
+  ];
+  const excluded = published.filter((v) => !semverSatisfies(v, range));
+  assert.deepEqual(excluded, [],
+    "schemastery peer 范围静默排除已发布版本：" + JSON.stringify(excluded));
+  // 也不能放行下一个大版本
+  assert.ok(!semverSatisfies("4.0.0", range), "不该放行 schemastery 4.x；范围=" + range);
+});
+
+test("打包契约：包里每个运行期 import 的 bare specifier 都必须装得上", () => {
+  // 这条是上面那次「peer-only 声明」事故的**通用化**收口。
+  //
+  // 事故回顾：把 schemastery 从 dependencies 改成仅 peer（且 optional）之后，
+  // 76 项单测全绿 —— 因为本地 node_modules 里那份还在。但在**一次性 profile**
+  // 里用真 dsh CLI 装，node_modules 下只有 dsh-service-portal 一个包，
+  // lib/index.js 第一行的 `import z from "@deepseek-ai/schemastery"` 直接
+  // ERR_MODULE_NOT_FOUND，插件整个加载不了。
+  //
+  // 教训：单测跑在开发检出上，永远看得见本地 node_modules，所以**看不见**
+  // 「新装用户缺什么」。这条断言不看本地装了什么，而是静态解析
+  // lib/index.js / lib/client.js 的 import，逐个要求：
+  //   - node: 内置 -> 不用管
+  //   - 相对路径 -> 必须真实存在
+  //   - bare specifier -> 必须在 dependencies 或 peerDependencies 里被声明
+  // 这样任何「新增 import 但忘了声明依赖」都会当场失败。
+  const bare = new Set();
+  const relative = new Set();
+  const scan = (file, source) => {
+    const re = /(?:^|\n)\s*(?:import\s[^;]*?from\s*|import\s*|require\()\s*["']([^"']+)["']/g;
+    let m;
+    while ((m = re.exec(source)) !== null) {
+      const spec = m[1];
+      if (spec.startsWith("node:")) continue;
+      if (spec.startsWith(".") || spec.startsWith("/")) relative.add(`${file}\u0000${spec}`);
+      else bare.add(spec);
+    }
+  };
+  scan("lib/index.js", readFileSync(join(ROOT, "lib", "index.js"), "utf8"));
+  scan("lib/client.js", bundle);
+
+  const declared = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+    ...Object.keys(pkg.optionalDependencies ?? {}),
+    // 客户端产物由宿主提供，凭 react 走宿主
+    ...Object.keys(pkg.peerDependenciesMeta ?? {}),
+  ]);
+
+  const undeclared = [...bare].filter((s) => {
+    if (declared.has(s)) return false;
+    // 子路径导入（如 `pkg/sub`）按其包名归属
+    const pkgName = s.startsWith("@") ? s.split("/").slice(0, 2).join("/") : s.split("/")[0];
+    return !declared.has(pkgName);
+  });
+  assert.deepEqual(undeclared, [],
+    "产物里 import 了没声明的依赖 —— 新装用户会直接加载失败："
+    + JSON.stringify(undeclared) + "（已声明=" + JSON.stringify([...declared]) + "）");
+
+  // 相对导入必须真实存在
+  const missingRel = [...relative].filter((k) => {
+    const [file, spec] = k.split("\u0000");
+    return !existsSync(resolve(ROOT, dirname(file), spec));
+  });
+  assert.deepEqual(missingRel, [],
+    "产物里的相对导入指向不存在的文件：" + JSON.stringify(missingRel));
 });
 
 test("loader id 与 package.json name 一致", () => {

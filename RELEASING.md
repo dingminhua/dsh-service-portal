@@ -18,8 +18,8 @@
 cd D:/DshProject/dsh-service-portal
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
 & $node client/build.mjs            # 重建客户端产物
-& $node --test test/host.test.mjs   # 18 项宿主端控制检验
-& $node --test test/client.test.mjs # 14 项客户端契约检验
+& $node --test test/host.test.mjs   # 50 项宿主端控制检验
+& $node --test test/client.test.mjs # 28 项客户端契约检验
 grep -F "Copyright (c) 2026 LaoDing" LICENSE
 ```
 

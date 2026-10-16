@@ -7,6 +7,10 @@ services.json
 # DSH 插件依赖（link 安装时不产生，独立安装时会有）
 node_modules/
 
+# npm 打包产物（npm pack 的本地 tar 包；CI 用 --no-package-lock，不入库锁文件）
+package-lock.json
+dsh-service-portal-*.tgz
+
 # Python
 __pycache__/
 *.pyc

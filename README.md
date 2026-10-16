@@ -63,8 +63,18 @@
 - **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
 - **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点；
   健康检查是**真探测**（TCP 连上游端口），不是标记位。
-- **控制检验**（本仓库硬纪律）—— 8 项 Python 控制检验 + 5 个端到端脚本 + 44 项 Node
+- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 78 项 Node
   检验；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
+
+## 界面
+
+门户页（扫码打开的那个页面，只读：测试 + 引导）：左边手机窄屏、中间深色、
+右边宽屏。截图由 `tools/shoot_portal.py` 用**真门户进程 + 无头 Chrome** 实拍，
+不是设计稿。
+
+| 窄屏（浅色） | 窄屏（深色） | 宽屏 |
+| :---: | :---: | :---: |
+| <img src="docs/assets/portal-phone.png" width="220" alt="门户页 窄屏 浅色"> | <img src="docs/assets/portal-phone-dark.png" width="220" alt="门户页 窄屏 深色"> | <img src="docs/assets/portal-wide.png" width="420" alt="门户页 宽屏"> |
 
 ## 工作原理
 
@@ -290,8 +300,8 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 46 项宿主端控制检验
-& $node --test test/client.test.mjs    # 17 项客户端分发契约检验
+& $node --test test/host.test.mjs      # 50 项宿主端控制检验
+& $node --test test/client.test.mjs    # 28 项客户端分发契约检验
 
 # Python 控制检验
 python -X utf8 tools\check_portal_bind.py
@@ -387,8 +397,8 @@ cloudflared 隧道域名（你发出去的地址就废了）。所以另起一�
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 24 项宿主端控制检验
-& $node --test test/client.test.mjs    # 17 项客户端分发契约检验
+& $node --test test/host.test.mjs      # 50 项宿主端控制检验
+& $node --test test/client.test.mjs    # 28 项客户端分发契约检验
 
 # 端到端验收：真起门户进程，逐条验证「内网免密/外网口令/页面管理服务/限速/健康检查」
 python -X utf8 test\acceptance_portal.py    # 29 项
