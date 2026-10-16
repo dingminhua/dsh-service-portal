@@ -41,7 +41,7 @@ portal itself has nothing to do with poker — **any local service** can use the
   (`https://<random>/train/`).
 - **Manifest-driven** — write `services.json` to expose any service without touching code; an empty
   manifest falls back to the built-in default (ld-rl-poker's two GUIs, backwards compatible).
-- **Control checks** (house rule) — 26 Python control-check scripts plus 8 end-to-end scripts, and 78
+- **Control checks** (house rule) — 26 Python control-check scripts plus 8 end-to-end scripts, and 83
   Node checks; **a missing dependency must "skip and return 2", never silently pass**.
 - **Host metrics** — CPU / memory / VRAM / GPU utilization; unreadable values render "—", never a fake 0.
 
@@ -90,7 +90,7 @@ Restart DSH after installing (the bundle loads in the host process).
 | Field | Default | Description |
 | :--- | :--- | :--- |
 | `infraPath` | this repo root | Infrastructure repo: contains `tools/` and `runs/` (tunnel/proxy/credentials) |
-| `repoPath` | `D:\DshProject\ld-rl-poker` | Host repo root: where the exposed services live |
+| `repoPath` | **empty** | Host repo root: where the exposed services live. **You must set this** |
 | `pythonPath` | empty | Interpreter for services; auto-selects `.venv313` → `.runtime` → PATH |
 | `passwordMode` | `random` | Password shape: `random` = new password each start / `fixed` = your fixed password |
 | `fixedPassword` | empty | Used when `passwordMode = fixed`, at least 12 chars (validated on save) |
@@ -197,7 +197,7 @@ python -X utf8 tools\check_plugin.py
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 50 host-side control checks
+& $node --test test/host.test.mjs      # 55 host-side control checks
 & $node --test test/client.test.mjs    # 28 client distribution contract checks
 
 # End-to-end acceptance: launches the real portal process and verifies

@@ -63,7 +63,7 @@
 - **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
 - **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点；
   健康检查是**真探测**（TCP 连上游端口），不是标记位。
-- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 78 项 Node
+- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 83 项 Node
   检验；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
 
 ## 界面
@@ -127,7 +127,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 | 字段 | 默认 | 说明 |
 | :--- | :--- | :--- |
 | `infraPath` | 本仓库根 | 基础设施仓库：含 `tools/` 与 `runs/`（隧道/代理/凭据） |
-| `repoPath` | `D:\DshProject\ld-rl-poker` | 宿主仓库根：被开放的服务本体在这里 |
+| `repoPath` | **空** | 宿主仓库根：被开放的服务本体在这里。**必须自己填** |
 | `pythonPath` | 空 | 拉服务用的解释器；留空则自动选 `.venv313` → `.runtime` → PATH |
 | `passwordMode` | `random` | 口令形态：`random` 每次开启自动生成 / `fixed` 用固定口令 |
 | `fixedPassword` | 空 | `passwordMode = fixed` 时使用，至少 12 字符（保存时即校验） |
@@ -300,7 +300,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 50 项宿主端控制检验
+& $node --test test/host.test.mjs      # 55 项宿主端控制检验
 & $node --test test/client.test.mjs    # 28 项客户端分发契约检验
 
 # Python 控制检验
@@ -397,7 +397,7 @@ cloudflared 隧道域名（你发出去的地址就废了）。所以另起一�
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 50 项宿主端控制检验
+& $node --test test/host.test.mjs      # 55 项宿主端控制检验
 & $node --test test/client.test.mjs    # 28 项客户端分发契约检验
 
 # 端到端验收：真起门户进程，逐条验证「内网免密/外网口令/页面管理服务/限速/健康检查」

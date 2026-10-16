@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.8.7 (2026-10-16)
+
+用户：「把默认值改为空值，再发布」。
+
+### Fixes
+
+- **`repoPath` 默认值不再预置作者本机路径**（原 `D:\DshProject\ld-rl-poker`）。
+
+  那是「第一用户」的机器路径，对任何别人都不成立。更糟的是它**看起来像配好了** ——
+  界面不报错，用户以为装完即可用，实际 `pythonFor` 会去那台并不存在的机器上探
+  `.venv313` / `.runtime`，全落空后静默回落到 PATH 的 python，拉服务时用的是错的解释器。
+
+  改为三处默认值为空：
+  - `lib/index.js` 的 `DEFAULT_REPO`
+  - `tools/portal_run.py` 的 `DEFAULT_HOST_REPO`
+  - `tools/start_public_gui.py` 的 `DEFAULT_HOST_REPO` / `DEFAULT_PYTHON`
+
+  `portal_run.py`（新门户）里 `host_repo` **只写进状态给界面显示**，服务清单走
+  `runs/portal_registry.json`，所以留空不影响启动 —— 已实测：空 `repoPath` 下
+  `startPublic` 成功、端口在听、`HTTP 200`、返回的是「对外服务门户」。
+
+- **`pythonFor` 在 `repoPath` 为空时不再拼相对路径**。
+
+  `join("", ".venv313", "Scripts", "python.exe")` 会得到 `.venv313/Scripts/python.exe`
+  这样一个**相对路径**，`existsSync` 按进程 cwd 解析 —— cwd 下恰好有同名目录就会
+  误命中，等于拿一个不是用户意图的解释器去拉服务。现在空值直接跳过宿主仓库那两个
+  候选，回落到 PATH 的 python。
+
+- **旧启动器（`start_public_gui.py`）在宿主仓库为空时给出可操作提示**，
+  而不是让 `os.path.isdir("")` 打印「宿主仓库不存在：」这种空路径。现在会列出
+  三条可行做法（设置页 `repoPath` / `SERVICE_HOST_REPO` / 自写 `services.json`）
+  并返回 2。`--python` 缺省值为空时的提示也单独写清楚了，不再出现
+  「未找到 ，改用 …」这种带空路径的话。
+
+- **`tools/shoot_portal.py` 的 Chrome 路径改为按平台探测**（原本写死
+  `C:\Program Files\Google\Chrome\Application\chrome.exe`，只有作者的 Windows 机器成立）。
+  新增 `find_chrome()`：`$CHROME` 环境变量优先，其次 macOS / Windows / Linux 的常见
+  安装位置。
+
+### Tests
+
+- 新增 5 条控制检验（`test/host.test.mjs`，50 → 55 项；全仓 78 → 83 项）：
+  - `repoPath` 默认为空字符串
+  - 运行期代码（`lib/` + `tools/*.py`）不得把绝对路径当**取值来源**
+  - 配置 schema 的 `repoPath` 默认值不得是作者本机路径
+  - `pythonFor` 在 `repoPath` 为空时不拼相对路径（用 cwd 下的诱饵目录反向验证）
+  - `pythonFor` 在 `repoPath` 非空时仍照旧优先 `.venv313`（防修过头）
+
+  每条都用**退回旧写法**验过会失败。
+
+  > 第二条的判据是「不得作为取值来源」，不是「不得出现这几个字」——
+  > 第一版按「出现盘符路径就报」写，跑出来 5 条里 5 条都不该报（注释里的举例、
+  > `os.environ.get("SystemRoot", r"C:\Windows")` 这类系统路径兜底）。
+  > 改判据后只揪出 1 条真问题（`shoot_portal.py` 的 Chrome 路径），已修。
+
+### Docs
+
+- README / README.en.md 的配置表：`repoPath` 默认值改为「**空**」并标注必须自己填。
+- `services.example.json` 的 `hostRepo` 改为占位路径并补说明（该文件不随 npm 包分发）。
+
 ## 0.8.6 (2026-10-16)
 
 发布前核查 awesome-dsh-plugin 收录要求时，查出**发布通道上一个致命缺陷**，

@@ -74,8 +74,9 @@ DEFAULT_CLOUDFLARED = os.path.join(
 # .venv313（依赖装在那里）。本仓库只是门户/隧道基础设施，通常没有自己的 venv。
 # 迁移前这里写死 ROOT/.venv313 —— 当时基础设施与服务同仓所以成立；
 # 拆开后必须跟着宿主走，否则会用错解释器（缺依赖 → 服务拉不起来）。
-DEFAULT_HOST_REPO = os.environ.get("SERVICE_HOST_REPO", r"D:\DshProject\ld-rl-poker")
-DEFAULT_PYTHON = os.path.join(DEFAULT_HOST_REPO, ".venv313", "Scripts", "python.exe")
+DEFAULT_HOST_REPO = os.environ.get("SERVICE_HOST_REPO", "")
+DEFAULT_PYTHON = (os.path.join(DEFAULT_HOST_REPO, ".venv313", "Scripts", "python.exe")
+                  if DEFAULT_HOST_REPO else "")
 
 # 服务清单来源（2026-10-15 迁移）。
 #
@@ -83,8 +84,9 @@ DEFAULT_PYTHON = os.path.join(DEFAULT_HOST_REPO, ".venv313", "Scripts", "python.
 # 第一个具体用途，但现在它是通用「对外服务门户」，清单必须可配置。
 # 优先级：--services <json> > $SERVICE_PORTAL_SERVICES > services.json > 内置默认。
 #
-# 默认清单仍指向 ld-rl-poker 的两个 GUI（保持向后兼容：不填就是原来的行为），
-# 但路径改为「宿主仓库根 + 相对脚本」，并用 hostRepo 指定宿主仓库。
+# hostRepo **不再预置任何人的本机路径**（默认空）：它是「被开放的服务放在哪」，
+# 只有用户自己知道。这里的服务项是相对脚本名，会相对宿主仓库根解析 ——
+# 所以宿主仓库为空时会在 main() 里直接给出可操作提示并返回 2，而不是拿空路径去猜。
 DEFAULT_SERVICES = {
     "hostRepo": DEFAULT_HOST_REPO,
     "services": [
@@ -388,6 +390,17 @@ def main(argv=None):
         return print_status()
 
     host_repo, TARGETS = load_services(args.services)
+    # 宿主仓库为空 = 还没配过（默认不再猜作者本机的路径）。这里必须给一句
+    # **可操作**的话，而不是让 os.path.isdir("") 报「宿主仓库不存在：」——
+    # 用户看到空路径只会更困惑，不知道要填什么。
+    if not host_repo:
+        print("还没指定宿主仓库（被开放的服务本体所在目录）。三选一：\n"
+              "  · 设置页：DSH 设置 → 插件 → dsh-service-portal → repoPath 填宿主仓库根\n"
+              "  · 环境变量：set SERVICE_HOST_REPO=<宿主仓库根>\n"
+              "  · 服务清单：写一个 services.json，填好 hostRepo，再用 --services 指过去\n"
+              "然后把宿主仓库根配上，或直接在设置页里改即可。",
+              file=sys.stderr)
+        return 2
     if not os.path.isdir(host_repo):
         print("宿主仓库不存在：%s（可用 --services 指定清单，或设 SERVICE_HOST_REPO）"
               % host_repo, file=sys.stderr)
@@ -399,7 +412,14 @@ def main(argv=None):
         return 2
     python_exe = args.python if os.path.isfile(args.python) else sys.executable
     if not os.path.isfile(args.python):
-        print("提示：未找到 %s，改用 %s" % (args.python, python_exe), file=sys.stderr)
+        # 空字符串要单独说清楚：默认已不再猜宿主仓库，所以「未找到 ，
+        # 改用 /usr/bin/python3」这种带空路径的提示会让人看不出该填什么。
+        if not args.python:
+            print("提示：未指定拉服务用的 python（宿主仓库未配置，无法推断 .venv313），"
+                  "改用 %s。可用 --python 指定，或在宿主仓库配好 .venv313。"
+                  % python_exe, file=sys.stderr)
+        else:
+            print("提示：未找到 %s，改用 %s" % (args.python, python_exe), file=sys.stderr)
 
     # 陈旧状态：先清掉上次的隧道，避免堆积
     if load_state():

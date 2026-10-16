@@ -22,7 +22,47 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT = os.path.join(ROOT, "runs", "shots")
-CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+
+def find_chrome():
+    """找一个无头浏览器。环境变量 CHROME 优先，其次按平台常见安装位置找。
+
+    原来这里写死 r"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ——
+    只有作者的 Windows 机器成立（本仓库的截图为实测要求跨平台可跑）。
+    """
+    env = os.environ.get("CHROME")
+    if env and os.path.isfile(env):
+        return env
+    candidates = []
+    if sys.platform == "darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+    elif os.name == "nt":
+        candidates = [
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)",
+                                        r"C:\Program Files (x86)"),
+                         r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         r"Google\Chrome\Application\chrome.exe"),
+        ]
+    else:
+        candidates = [
+            "/usr/bin/google-chrome", "/usr/bin/chromium",
+            "/usr/bin/chromium-browser", "/snap/bin/chromium",
+        ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    raise SystemExit(
+        "找不到无头浏览器。设环境变量 CHROME 指向可执行文件，或装 Chrome/Chromium。")
+
+
+CHROME = None  # 由 main() 调 find_chrome() 填充（import 期不探文件系统）
 
 STATE_SERVICES = [
     {"key": "realapp", "name": "真实应用", "mount": "/realapp",
@@ -43,6 +83,8 @@ def free_port():
 
 
 def main():
+    global CHROME
+    CHROME = find_chrome()
     os.makedirs(OUT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="shoot-")
     runs = os.path.join(tmp, "runs")

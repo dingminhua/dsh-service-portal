@@ -1,7 +1,8 @@
 {
-  "_comment": "对外服务门户的服务清单示例。复制成 services.json 后按需修改；不填则用内置默认（ld-rl-poker 的两个 GUI）。",
-  "_howToUse": "python -X utf8 tools/start_public_gui.py --single-domain   # 会自动读取本文件同目录的 services.json",
-  "hostRepo": "D:\\DshProject\\ld-rl-poker",
+  "_comment": "对外服务门户的服务清单示例。复制成 services.json 后按需修改（本文件在仓库里，不在 npm 包里）。",
+  "_howToUse": "python -X utf8 tools/start_public_gui.py --services <本文件路径> --single-domain",
+  "_hostRepoNote": "hostRepo 必须改成你自己的宿主仓库根（被开放的服务本体所在目录）。这里不预置任何人的本机路径。",
+  "hostRepo": "C:\\path\\to\\your\\host-repo",
   "services": [
     {
       "key": "train",

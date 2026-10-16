@@ -15,7 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -116,6 +116,116 @@ test("pythonFor：宿主 .venv313 存在则用它（Windows 布局）", () => {
     const py = join(venv, "python.exe");
     writeFileSync(py, "# stub\n", "utf8");
     // 传入一个不存在的 configured，验证回退到 .venv313
+    assert.equal(pythonFor(root, ""), py);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 默认宿主仓库必须是**空的**，不得预置作者本机路径。
+//
+// 起因（2026-10-16 发布前复核查出）：DEFAULT_REPO 曾写死 `D:\DshProject\ld-rl-poker`
+// —— 那是「第一用户」的机器路径，对任何别人都不成立。别人装完看到的是一个
+// 不存在的目录，却因为界面不报错而**以为配好了**，实际拉服务时用的是错的解释器。
+//
+// 空默认值的两个必须成立的性质（都做成可证伪的断言）：
+//   1. 包里/源码里不得再出现作者的本机绝对路径；
+//   2. repoPath 为空时，pythonFor **不得**去拼相对路径 ——
+//      join("", ".venv313", ...) 会得到 ".venv313/Scripts/python.exe" 这样的
+//      相对路径，existsSync 按 cwd 解析，cwd 下恰好有同名目录就会误命中。
+// ---------------------------------------------------------------------------
+
+test("默认值：repoPath 默认是空字符串（不预置作者本机路径）", () => {
+  const cfg = configOf({});
+  assert.equal(cfg.repoPath, "", "repoPath 默认必须是空 —— 不得猜用户的服务放在哪");
+  assert.equal(typeof cfg.repoPath, "string");
+});
+
+test("默认值：运行期代码里不得把作者本机路径当**取值来源**", () => {
+  // 只查**发货的运行期代码**：lib/ 与 tools/。
+  //
+  // 断言的是「不得作为取值来源」，不是「不得出现这几个字」—— 以下三类出现是正当的，
+  // 一刀切会把它们一起误伤（第一版就是这么写的，跑出来 5 条里 5 条都不该报）：
+  //   · 注释/文档字符串里的举例（讲清「以前写死过什么、为什么改」）
+  //   · Windows 系统路径兜底（os.environ.get("SystemRoot", r"C:\Windows")）
+  //   · 文档字符串里的清单格式示例（"D:\\\\path\\\\to\\\\host"）
+  // 所以判据是：这一行属于注释/文档字符串，或是环境变量缺省值里的系统路径。
+  const offenders = [];
+  const scanFile = (rel) => {
+    const lines = readFileSync(join(ROOT, rel), "utf8").split("\n");
+    let inDoc = false;
+    lines.forEach((line, i) => {
+      const trimmed = line.trim();
+      const quotes = (line.match(/"""/g) || []).length;
+      const isDocLine = inDoc || quotes > 0 || trimmed.startsWith("#")
+        || trimmed.startsWith("//") || trimmed.startsWith("*")
+        || trimmed.startsWith("/*");
+      if (quotes % 2 === 1) inDoc = !inDoc;
+
+      const m = /["'`]([A-Za-z]:[\\/][^"'`]*|[\\/](?:Users|home)\/[^"'`]*)["'`]/
+        .exec(line);
+      if (!m) return;
+      if (isDocLine) return;                      // 注释/举例：正当
+      // 环境变量缺省值里的系统路径：正当（Windows 的 ProgramFiles / SystemRoot）。
+      // 可能跨行 —— 往前看 3 行里有没有 `os.environ.get(`（括号还没闭合）。
+      const near = lines.slice(Math.max(0, i - 3), i + 1).join("\n");
+      if (/os\.environ\.get\([^)]*,/.test(near) && (near.match(/\(/g) || []).length
+          > (near.match(/\)/g) || []).length - 1) return;
+      offenders.push(`${rel}:${i + 1} -> ${m[1]}`);
+    });
+  };
+  scanFile("lib/index.js");
+  for (const f of readdirSync(join(ROOT, "tools"))) {
+    if (f.endsWith(".py")) scanFile(`tools/${f}`);
+  }
+  assert.deepEqual(offenders, [],
+    "运行期代码把绝对路径当取值来源了（会泄路径 / 换台机器就废）：\n  "
+    + offenders.join("\n  "));
+});
+
+test("默认值：配置 schema 的 repoPath 默认值不得是作者本机路径", () => {
+  // 上一条按行扫，可能被续行/缩进绕过；这条直接问默认值本身。
+  const cfg = configOf({});
+  assert.ok(!/^[A-Za-z]:[\\/]/.test(cfg.repoPath),
+    `repoPath 默认值仍是绝对路径：${cfg.repoPath}`);
+  assert.ok(!cfg.repoPath.includes("DshProject"),
+    `repoPath 默认值仍含作者本机目录名：${cfg.repoPath}`);
+});
+
+test("pythonFor：repoPath 为空时不拼相对路径（否则可能按 cwd 误命中）", () => {
+  const root = fakeRepo({});
+  try {
+    // 在当前 cwd 下造一个 .venv313 —— 若实现写了 join("", ...) 且 cwd 恰好
+    // 是 root，就会误命中；正确实现应该无视它，回落到 PATH 的 python。
+    const cwdVenv = join(root, ".venv313", "Scripts");
+    mkdirSync(cwdVenv, { recursive: true });
+    const decoy = join(cwdVenv, "python.exe");
+    writeFileSync(decoy, "# decoy\n", "utf8");
+
+    const prev = process.cwd();
+    process.chdir(root);
+    try {
+      const picked = pythonFor("", "");
+      assert.equal(picked, "python",
+        "repoPath 为空时必须跳过宿主仓库探测、回落到 PATH 的 python；"
+        + `实际选到 ${picked}（说明拼出了相对路径并按 cwd 命中了诱饵）`);
+    } finally {
+      process.chdir(prev);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pythonFor：repoPath 非空时仍然照旧优先 .venv313", () => {
+  // 反向控制：修「空值」不能把「有值」的路径一起改坏
+  const root = fakeRepo({});
+  try {
+    const venv = join(root, ".venv313", "Scripts");
+    mkdirSync(venv, { recursive: true });
+    const py = join(venv, "python.exe");
+    writeFileSync(py, "# stub\n", "utf8");
     assert.equal(pythonFor(root, ""), py);
   } finally {
     rmSync(root, { recursive: true, force: true });
