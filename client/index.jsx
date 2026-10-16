@@ -89,6 +89,100 @@ const LINE = {
   body: 1.6,
 };
 
+// ============================================================================
+// 一份真实的 CSS（照 workbuddy 的做法：模块加载时注入一个 <style>）
+// ============================================================================
+//
+// 为什么必须有它而不是全靠内联 style：
+//   · **hover / focus-visible / active 没法内联** —— 而 UX 规范明确要求
+//     "所有可点击元素提供明确的按压反馈"「键盘导航焦点可见」。之前按钮点了
+//     毫无反应，就是这个原因；
+//   · **媒体查询没法内联** —— 窄屏要塌成单栏、二维码要缩小，只能靠 @media；
+//   · `disabled` 的视觉弱化、`prefers-reduced-motion` 也都在这里。
+//
+// 类名一律加 `dsp-` 前缀，避免与宿主或其他插件的类名撞车
+// （workbuddy 用 `dsm-`，同一个约定）。颜色只引用真实主题令牌。
+const CSS_ID = "dsh-service-portal/client.css";
+const CARD_CSS = `
+/* ---- 卡片与栏 ---- */
+.dsp-card{background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-radius:12px;box-sizing:border-box;width:100%;max-width:880px;color:var(--dsw-alias-label-primary,inherit)}
+.dsp-card,.dsp-card *{box-sizing:border-box}
+.dsp-duo{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:16px}
+.dsp-pane{border:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-radius:10px;padding:16px;min-width:0}
+.dsp-qr{width:176px;height:176px}
+/* 窄屏（窄面板 / 手机）：塌成单栏，二维码缩到 132（否则一个码占掉半屏） */
+@media (max-width:720px){
+  .dsp-duo{grid-template-columns:1fr}
+  .dsp-qr{width:132px;height:132px}
+  .dsp-card{padding:14px!important}
+}
+/* ---- 按钮原语：按压反馈 + 焦点环 + 禁用态 ---- */
+.dsp-btn,.dsp-primary,.dsp-danger,.dsp-access{
+  font:inherit;cursor:pointer;border-radius:999px;height:32px;padding:0 14px;
+  font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;
+  white-space:nowrap;text-decoration:none;
+  transition:background-color .15s ease,border-color .15s ease,opacity .15s ease;
+}
+.dsp-primary{background:var(--dsw-alias-brand-primary,#4f6ef7);color:#fff;border:1px solid transparent;font-weight:500}
+.dsp-primary:hover:not(:disabled){opacity:.88}
+.dsp-btn{background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#e5e7eb);color:var(--dsw-alias-label-primary,inherit)}
+.dsp-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2,#f3f4f6)}
+.dsp-danger{background:transparent;border:1px solid var(--dsw-alias-state-error-primary,#dc2626);color:var(--dsw-alias-state-error-primary,#dc2626)}
+.dsp-danger:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#dc2626) 10%,transparent)}
+.dsp-access{background:transparent;border:1px solid var(--dsw-alias-brand-primary,#4f6ef7);color:var(--dsw-alias-brand-primary,#4f6ef7)}
+.dsp-access:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4f6ef7) 10%,transparent)}
+.dsp-btn:disabled,.dsp-primary:disabled,.dsp-danger:disabled{opacity:.5;cursor:not-allowed}
+/* 键盘焦点：仅键盘导航时出现（鼠标点击不出焦点环，避免"点一下就留个框"） */
+.dsp-btn:focus-visible,.dsp-primary:focus-visible,.dsp-danger:focus-visible,
+.dsp-access:focus-visible,.dsp-switch:focus-visible,.dsp-link:focus-visible,
+.dsp-input:focus-visible,.dsp-select:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4f6ef7);outline-offset:2px}
+/* ---- 开关 ---- */
+.dsp-switch{position:relative;width:44px;height:26px;border-radius:999px;border:none;cursor:pointer;flex:0 0 auto;padding:0;transition:background-color .15s}
+.dsp-switch:disabled{opacity:.5;cursor:not-allowed}
+.dsp-knob{position:absolute;top:3px;width:20px;height:20px;border-radius:999px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .15s}
+/* ---- 链接（「鼓励一下」）---- */
+.dsp-link{color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px;text-decoration:underline;text-underline-offset:2px;cursor:pointer;flex:0 0 auto}
+.dsp-link:hover{color:var(--dsw-alias-label-primary,inherit)}
+/* ---- 表单控件 ---- */
+.dsp-input,.dsp-select{
+  font:inherit;font-size:13px;height:32px;padding:0 10px;border-radius:8px;
+  border:1px solid var(--dsw-alias-border-l2,#e5e7eb);
+  background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,inherit);
+  min-width:0;flex:1 1 160px;
+}
+.dsp-input::placeholder{color:var(--dsw-alias-label-secondary,#6b7280)}
+/* 节点卡：hover 时边框加深，指示"这是一条可操作的记录" */
+.dsp-svc{border:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-radius:10px;padding:8px 10px;background:var(--dsw-alias-bg-layer-2,#f3f4f6);margin-top:8px;transition:border-color .15s}
+.dsp-svc:hover{border-color:var(--dsw-alias-label-secondary,#6b7280)}
+/* 减少动态：尊重系统设置（规范要求），别让过渡成为不适来源 */
+@media (prefers-reduced-motion:reduce){
+  .dsp-btn,.dsp-primary,.dsp-danger,.dsp-access,.dsp-switch,.dsp-svc,.dsp-knob{transition:none}
+}
+`;
+
+// 注入（或刷新）本插件的 <style>。为什么查重而不是直接 append：
+// 面板可能被重新挂载（切页面/改设置），无脑 append 会越堆越多；
+// workbuddy 用同一个 data-plugin-css 标记做幂等，这里照做。
+if (typeof document !== "undefined") {
+  try {
+    const existing = document.querySelector('style[data-plugin-css="' + CSS_ID + '"]');
+    if (existing) {
+      existing.textContent = CARD_CSS;
+    } else {
+      const tag = document.createElement("style");
+      tag.dataset.plugin = name;
+      tag.dataset.pluginCss = CSS_ID;
+      tag.textContent = CARD_CSS;
+      document.head.appendChild(tag);
+    }
+  } catch (err) {
+    // 注入失败不能让整个面板挂掉（样式没了也能用，只是不好看）
+    if (typeof console !== "undefined" && console.error) {
+      console.error("[dsh-service-portal] 注入样式失败（面板仍可用）:", err);
+    }
+  }
+}
+
 /**
  * 面板里所有颜色都必须走这里。`--dsw-alias-*` 是宿主主题令牌，
  * 深浅色各一套；写死 hex 只当令牌缺失时的兜底。
@@ -114,23 +208,27 @@ const COLOR = {
 };
 
 const styles = {
-  card: {
-    background: COLOR.surface,
-    border: "1px solid " + COLOR.border,
-    borderRadius: 12, padding: "16px 20px", maxWidth: 560,
-    color: COLOR.textPrimary, fontSize: TYPE.body, lineHeight: LINE.body,
-  },
+  // 静态结构（宽度、边框、圆角、两栏栅格、响应式）都由注入的 CARD_CSS 承担：
+  // 内联 style 做不了 hover / focus-visible / @media。
+  // 这里只留那些**必须**逐实例计算的东西（颜色随状态变、尺寸随开关变）。
+  card: { color: COLOR.textPrimary, fontSize: TYPE.body, lineHeight: LINE.body },
   head: {
-    display: "flex", alignItems: "center", gap: 10,
+    display: "flex", alignItems: "flex-start", gap: 12,
     marginBottom: SPACE.block,
   },
   icon: { borderRadius: 8, display: "block", flex: "0 0 auto" },
+  // 标题块：给 minWidth 0 以便窄屏能正常收缩（flex 子项默认不肯缩，
+  // 长文案会把「鼓励一下」挤出容器 —— 用户截图里标题和副标题叠在一起就是它）
+  headText: { flex: 1, minWidth: 0 },
   title: {
     fontSize: TYPE.title, lineHeight: LINE.title, fontWeight: 600,
     color: COLOR.textPrimary,
   },
-  // 标题下的副标题（与标题同块，所以不额外加 margin）
-  subtitle: { fontSize: TYPE.caption, lineHeight: LINE.body, color: COLOR.textMuted },
+  // 标题下的副标题（与标题同块，所以只给一小段间距，取刻度里的最小档）
+  subtitle: {
+    fontSize: TYPE.caption, lineHeight: LINE.body, color: COLOR.textMuted,
+    marginTop: SPACE.inline,
+  },
   row: { display: "flex", gap: SPACE.row, alignItems: "center", flexWrap: "wrap" },
   rowBetween: {
     display: "flex", gap: SPACE.row, alignItems: "center",
@@ -165,29 +263,16 @@ const styles = {
     lineHeight: LINE.body, wordBreak: "break-all", margin: 0,
     color: COLOR.textPrimary,
   },
-  primary: {
-    font: "inherit", cursor: "pointer", border: "none",
-    background: COLOR.brand,
-    // 品牌色是深蓝，前景用白色；真实令牌里没有 foreground，用 #fff 兜底是安全的
-    color: "#fff",
-    height: 32, padding: "0 14px", borderRadius: 999,
-    fontSize: TYPE.body, lineHeight: 1, fontWeight: 500,
-  },
-  btn: {
-    font: "inherit", cursor: "pointer",
-    border: "1px solid " + COLOR.border,
-    background: COLOR.surface,
-    color: COLOR.textPrimary,
-    height: 32, padding: "0 14px", borderRadius: 999,
-    fontSize: TYPE.body, lineHeight: 1,
-  },
-  danger: {
-    font: "inherit", cursor: "pointer",
-    border: "1px solid " + COLOR.error,
-    background: "transparent", color: COLOR.error,
-    height: 32, padding: "0 14px", borderRadius: 999,
-    fontSize: TYPE.body, lineHeight: 1,
-  },
+  // 按钮原语：外观（底色/描边/圆角/尺寸/hover/焦点/禁用）全部由注入的
+  // CARD_CSS 里的 .dsp-* 类承担。
+  //
+  // 为什么这里**不能**再写 background/color：内联样式的优先级高于类选择器，
+  // 连 `:hover` 也压不过它 —— 内联一旦写了底色，类里的 hover 就成了死代码。
+  // 所以这四个只留"非外观"的补充，外观交给类。
+  primary: {},
+  btn: {},
+  danger: {},
+  accessLink: {},
   warn: {
     color: COLOR.warn, fontSize: TYPE.caption,
     lineHeight: LINE.body, marginTop: SPACE.row,
@@ -212,11 +297,11 @@ const styles = {
   // 警示块里的标题行（如「公网暴露风险」）：加粗 + 警示色，
   // 让"这是警告"由结构（色条 + 加粗标题）承担，而不是 emoji。
   warnBoxTitle: { color: COLOR.warn, fontWeight: 600 },
-  // 右上角「鼓励一下 ★」：一句灰色下划线短链接（用户指定的最终形态）
+  // 右上角「鼓励一下 ★」：颜色/下划线/hover 由 .dsp-link 类承担。
+  // 这里只留布局相关的（不被 hover 规则影响的部分）。
   creditLink: {
-    color: COLOR.textMuted, fontSize: TYPE.caption, lineHeight: LINE.body,
-    textDecoration: "underline", whiteSpace: "nowrap", flexShrink: 0,
-    marginLeft: 12,
+    lineHeight: LINE.body, whiteSpace: "nowrap", flexShrink: 0,
+    marginLeft: 12, marginTop: SPACE.inline,
   },
   tag: {
     fontSize: TYPE.caption, lineHeight: 1, padding: "3px 8px", borderRadius: 999,
@@ -226,12 +311,13 @@ const styles = {
     display: "inline-flex", alignItems: "center", gap: 6,
     fontSize: TYPE.body, cursor: "pointer", color: COLOR.textSecondary,
   },
+  // 输入框：外观（高度/圆角/描边/底色/内边距）由 .dsp-input 类承担 ——
+  // 内联写死会让 :focus-visible 的焦点环与 hover 失去意义。
+  // 这里只留**本插件特有**的：等宽字体（端口/路径/口令都好核对）。
+  // minWidth 也去掉：类里用 `flex:1 1 160px`，在窄栏里能正常收缩；
+  // 原来写死 220 会把两列输入框在窄栏里挤成一行都放不下。
   input: {
-    font: "inherit", fontSize: TYPE.body,
     fontFamily: "ui-monospace,Menlo,monospace",
-    height: 32, padding: "0 10px", borderRadius: 8, minWidth: 220,
-    border: "1px solid " + COLOR.border,
-    background: COLOR.surface, color: COLOR.textPrimary,
   },
   badge: (on) => ({
     display: "inline-flex", alignItems: "center", gap: 5,
@@ -254,8 +340,11 @@ const styles = {
     display: "flex", gap: SPACE.row, alignItems: "center",
     justifyContent: "center", flexWrap: "wrap", marginTop: SPACE.row,
   },
+  // 二维码：**尺寸交给 .dsp-qr 类**，不在这里写 width/height ——
+  // 内联尺寸会压过 CSS 里的 `@media (max-width:720px){width:132px}`，
+  // 窄屏就缩不下来（一个 176 的码会把手机上的首屏占掉一半）。
   qrImg: {
-    width: 176, height: 176, imageRendering: "pixelated",
+    imageRendering: "pixelated",
     borderRadius: 8, background: "#fff", padding: 6,
     border: "1px solid " + COLOR.border,
   },
@@ -264,18 +353,15 @@ const styles = {
     fontSize: TYPE.caption, color: COLOR.textMuted,
     lineHeight: LINE.body, marginBottom: SPACE.inline,
   },
-  // iOS 风格小开关（与 dsh-pocket 的观感一致）
+  // iOS 风格小开关（与 dsh-pocket 的观感一致）。
+  // 尺寸/圆角/cursor 在 .dsp-switch 类里；这里只留**随状态变**的底色
+  // （那是逐实例的，类选择器表达不了）。
   switch: (on) => ({
-    position: "relative", width: 44, height: 26, borderRadius: 999,
-    border: "none", cursor: "pointer", flex: "0 0 auto", padding: 0,
     background: on ? COLOR.success : COLOR.border,
-    transition: "background .15s",
   }),
-  knob: (on) => ({
-    position: "absolute", top: 3, left: on ? 21 : 3,
-    width: 20, height: 20, borderRadius: 999, background: "#fff",
-    transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,.25)",
-  }),
+  // 开关上的圆钮：位置随开关变（逐实例），其余交给 .dsp-knob 类
+  // （过渡与投影是通用的，写在类里，并服从 prefers-reduced-motion）。
+  knob: (on) => ({ left: on ? 21 : 3 }),
   // 启动器输出：等宽小字，限高可滚
   pre: {
     fontFamily: "ui-monospace,Menlo,monospace", fontSize: TYPE.caption,
@@ -303,11 +389,9 @@ const styles = {
     flexWrap: "wrap", marginTop: SPACE.inline,
   },
   // ---- 服务卡（设置页里管理服务用；原来只有控制台页面有）----
-  svc: {
-    border: "1px solid " + COLOR.border, borderRadius: 10,
-    padding: `${SPACE.row}px ${SPACE.row + 2}px`,
-    background: COLOR.surfaceSubtle, marginTop: SPACE.row,
-  },
+  // 节点卡：边框/圆角/内边距/底色/hover 由 .dsp-svc 类承担
+  // （hover 加深边框是"这条可操作"的提示，内联做不了）。
+  svc: { marginTop: SPACE.row },
   svcHead: {
     display: "flex", alignItems: "baseline", gap: SPACE.row,
     flexWrap: "wrap", justifyContent: "space-between",
@@ -323,16 +407,8 @@ const styles = {
     border: "1px solid " + COLOR.border, borderRadius: 6,
     padding: "1px 6px", whiteSpace: "nowrap",
   },
-  // 「访问」链接：沿用 btn 的观感但用 brand 色描边，与「复制」区分开
-  // （复制是"拿走地址"，访问是"点开看"，两者不同）
-  accessLink: {
-    font: "inherit", cursor: "pointer", textDecoration: "none",
-    border: "1px solid " + COLOR.brand, background: "transparent",
-    color: COLOR.brand,
-    height: 32, padding: "0 14px", borderRadius: 999,
-    fontSize: TYPE.body, lineHeight: 1,
-    display: "inline-flex", alignItems: "center", whiteSpace: "nowrap",
-  },
+  // 「访问」链接：外观由 .dsp-access 类承担（同上：内联会压死 :hover）。
+  accessLink: {},
 };
 
 function fmtTime(text) {
@@ -341,13 +417,14 @@ function fmtTime(text) {
 }
 
 function Switch(on, onClick, disabled) {
+  // disabled 的弱化交给 .dsp-switch:disabled（类里），不再内联 ——
+  // 内联会与类里的规则重复，且以后改一处忘另一处。
   return h("button", {
     type: "button", role: "switch", "aria-checked": !!on,
     disabled: !!disabled,
-    style: Object.assign({}, styles.switch(on),
-      disabled ? { opacity: 0.5, cursor: "not-allowed" } : null),
+    className: "dsp-switch", style: styles.switch(on),
     onClick: disabled ? undefined : onClick,
-  }, h("span", { style: styles.knob(on) }));
+  }, h("span", { className: "dsp-knob", style: styles.knob(on) }));
 }
 
 function ServicePortalSettingsTab(props) {
@@ -747,14 +824,14 @@ function ServicePortalSettingsTab(props) {
       src: SERVICE_PORTAL_PLUGIN_ICON, alt: "", width: 32, height: 32,
       style: styles.icon,
     }),
-    h("div", { style: { flex: 1, minWidth: 0 } },
+    h("div", { style: styles.headText },
       h("div", { style: styles.title }, "对外服务门户"),
       h("div", { style: styles.subtitle },
         "手机扫码打开的就是门户控制台，在那里管理要开放的服务"),
     ),
     h("a", {
       href: REPO_URL, target: "_blank", rel: "noreferrer",
-      style: styles.creditLink, title: "去 GitHub 给这个项目留颗 Star",
+      className: "dsp-link", style: styles.creditLink, title: "去 GitHub 给这个项目留颗 Star",
     }, "鼓励一下 ★"),
   ));
 
@@ -803,21 +880,23 @@ function ServicePortalSettingsTab(props) {
     startRows.push(h("div", { key: "off-btns",
       style: Object.assign({}, styles.row, styles.gapTopSm) },
       h("button", {
-        style: styles.primary, type: "button", disabled: !!busy,
+        className: "dsp-primary", style: styles.primary, type: "button", disabled: !!busy,
         onClick: () => doStart(true),
       }, busy === "start-lan" ? "启动中…" : "启动（只内网）"),
       h("button", {
-        style: styles.btn, type: "button", disabled: !!busy,
+        className: "dsp-btn", style: styles.btn, type: "button", disabled: !!busy,
         onClick: () => doStart(false),
       }, busy === "start" ? "启动中…" : "启动并开公网"),
-      h("button", { style: styles.btn, type: "button", onClick: load }, "刷新"),
+      h("button", { className: "dsp-btn", style: styles.btn, type: "button", onClick: load }, "刷新"),
     ));
     children.push(h("div", { key: "off", style: styles.block }, startRows));
   }
 
   // ============ 局域网区块 ============
+  // lanRows 要在 if 外声明：它随后要跟 publicRows 一起进两栏栅格，
+  // 而栅格那行在 if 之外（未启动时也要显示"未启动"态）。
+  const lanRows = [];
   if (running) {
-    const lanRows = [];
     lanRows.push(h("div", { key: "lan-head", style: styles.rowBetween },
       h("div", { style: styles.sectionTitle, marginBottom: 0 }, "局域网访问"),
       Switch(lanEnabled, () => setLanEnabledFlag(!lanEnabled)),
@@ -828,7 +907,7 @@ function ServicePortalSettingsTab(props) {
         lanEnabled
           ? (qrs[lanPrimary]
               ? h("img", { src: qrs[lanPrimary], alt: "局域网二维码",
-                           style: styles.qrImg })
+                           className: "dsp-qr", style: styles.qrImg })
               : h("div", { style: Object.assign({}, styles.qrImg, {
                   display: "flex", alignItems: "center", justifyContent: "center" }),
                 }, h("span", { style: styles.muted }, "二维码生成中…")))
@@ -843,10 +922,10 @@ function ServicePortalSettingsTab(props) {
           h("code", { style: styles.code }, lanPrimary),
           h("a", {
             href: lanPrimary, target: "_blank", rel: "noreferrer",
-            style: styles.accessLink,
+            className: "dsp-access", style: styles.accessLink,
           }, "访问"),
           h("button", {
-            style: styles.btn, type: "button",
+            className: "dsp-btn", style: styles.btn, type: "button",
             onClick: () => copyText("lan", lanPrimary),
           }, copied === "lan" ? "已复制" : "复制"),
         ),
@@ -879,12 +958,12 @@ function ServicePortalSettingsTab(props) {
           showPassword ? (lanPassword || "(无)")
             : "•".repeat((lanPassword || "").length)),
         h("button", {
-          style: styles.btn, type: "button",
+          className: "dsp-btn", style: styles.btn, type: "button",
           onClick: () => setShowPassword(!showPassword),
         }, showPassword ? "隐藏" : "显示"),
         // 刷新：换一个新的**随机数字**局域网口令（对齐 dsh-pocket 的 lanTokenRefresh）
         h("button", {
-          style: styles.btn, type: "button",
+          className: "dsp-btn", style: styles.btn, type: "button",
           onClick: async () => {
             setBusy("lan-pin");
             try {
@@ -902,7 +981,7 @@ function ServicePortalSettingsTab(props) {
         }, busy === "lan-pin" ? "刷新中…" : "刷新"),
         !customOpen
           ? h("button", {
-              style: styles.btn, type: "button",
+              className: "dsp-btn", style: styles.btn, type: "button",
               onClick: () => { setCustomOpen(true); setCustomErr(""); },
             }, "自定义")
           : null,
@@ -916,7 +995,7 @@ function ServicePortalSettingsTab(props) {
     if (customOpen) {
       lanRows.push(h("div", { key: "lan-custom", style: styles.row },
         h("input", {
-          type: "text", value: customValue, style: styles.input,
+          type: "text", value: customValue, className: "dsp-input", style: styles.input,
           placeholder: "局域网新口令（6–12 位数字）", autoComplete: "off",
           inputMode: "numeric", maxLength: LAN_PIN_MAX, autoFocus: true,
           // 只留数字：局域网口令是给手机手输的，允许字母/符号只会让人输错
@@ -926,11 +1005,11 @@ function ServicePortalSettingsTab(props) {
             if (e.key === "Escape") { setCustomOpen(false); setCustomErr(""); }
           },
         }),
-        h("button", { style: styles.primary, type: "button",
+        h("button", { className: "dsp-primary", style: styles.primary, type: "button",
                       disabled: busy === "lan-custom",
                       onClick: saveCustomPin },
           busy === "lan-custom" ? "保存中…" : "保存"),
-        h("button", { style: styles.btn, type: "button",
+        h("button", { className: "dsp-btn", style: styles.btn, type: "button",
                       onClick: () => { setCustomOpen(false); setCustomErr(""); } },
           "取消"),
         customErr ? h("span", { style: styles.errInline }, customErr) : null,
@@ -944,7 +1023,7 @@ function ServicePortalSettingsTab(props) {
     const candidates = status.lanCandidates || [];
     lanRows.push(h("div", { key: "lan-adv", style: styles.rowBetween },
       h("button", {
-        style: Object.assign({}, styles.btn, { border: "none", padding: 0,
+        className: "dsp-btn", style: Object.assign({}, styles.btn, { border: "none", padding: 0,
           background: "transparent", color: "var(--dsw-alias-label-secondary,#6b7280)" }),
         type: "button",
         onClick: () => setAdvOpen(!advOpen),
@@ -956,7 +1035,7 @@ function ServicePortalSettingsTab(props) {
         h("span", { style: styles.label }, "局域网地址"),
         h("select", {
           value: lanIp || "",
-          style: styles.input,
+          className: "dsp-select", style: styles.input,
           onChange: (e) => setLanIpOverride(e.target.value),
         },
           h("option", { value: "" }, "自动（推荐）"),
@@ -973,7 +1052,15 @@ function ServicePortalSettingsTab(props) {
         + "选错了手机就连不上。"));
     }
 
-    children.push(h("div", { key: "lan", style: styles.block }, lanRows));
+    // 注意：这里**不**单独 push —— 与公网那栏一起放进两栏栅格
+    // （见下面 children.push(key:"duo")）。两栏在宽栏下并排、窄栏自动叠。
+  } else {
+    // 未启动：局域网这栏也要有个占位，否则栅格里只剩公网一栏、左边空着
+    lanRows.push(h("div", { key: "lan-head", style: styles.rowBetween },
+      h("div", { style: styles.sectionTitle, marginBottom: 0 }, "局域网访问"),
+    ));
+    lanRows.push(h("div", { key: "lan-off", style: styles.muted },
+      "门户未启动。启动后这里会出现内网地址与二维码（同一 WiFi 扫码即可打开）。"));
   }
 
   // ============ 公网区块 ============
@@ -983,12 +1070,12 @@ function ServicePortalSettingsTab(props) {
     // 门户没在跑时**不放按钮**：那个「开启公网访问」既点不动、又不是当前该做的
     // 事情（得先启动门户）。之前它顶在面板最上面，看着像主操作，实际是死按钮。
     publicUrl
-      ? h("button", { style: styles.danger, type: "button",
+      ? h("button", { className: "dsp-danger", style: styles.danger, type: "button",
                       disabled: !!busy, onClick: doStopTunnel },
           busy === "tunnel-stop" ? "关闭中…" : "关闭公网")
       : running
         ? h("button", {
-            style: styles.primary, type: "button",
+            className: "dsp-primary", style: styles.primary, type: "button",
             disabled: !!busy,
             onClick: () => doStart(false),
           }, busy === "start" ? "开启中…" : "开启公网访问")
@@ -999,7 +1086,7 @@ function ServicePortalSettingsTab(props) {
     pubRows.push(h("div", { key: "pub-qr", style: styles.qrBox },
       qrs[publicUrl]
         ? h("img", { src: qrs[publicUrl], alt: "公网二维码",
-                     style: styles.qrImg })
+                     className: "dsp-qr", style: styles.qrImg })
         : h("div", { style: Object.assign({}, styles.qrImg, {
             display: "flex", alignItems: "center", justifyContent: "center" }),
           }, h("span", { style: styles.muted }, "二维码生成中…")),
@@ -1008,10 +1095,10 @@ function ServicePortalSettingsTab(props) {
         // 「访问」与「复制」并排（用户要求），公网这边同样
         h("a", {
           href: publicUrl, target: "_blank", rel: "noreferrer",
-          style: styles.accessLink,
+          className: "dsp-access", style: styles.accessLink,
         }, "访问"),
         h("button", {
-          style: styles.btn, type: "button",
+          className: "dsp-btn", style: styles.btn, type: "button",
           onClick: () => copyText("public", publicUrl),
         }, copied === "public" ? "已复制" : "复制"),
       ),
@@ -1033,24 +1120,24 @@ function ServicePortalSettingsTab(props) {
         h("code", { style: styles.code },
           showPassword ? password : "•".repeat(password.length)),
         h("button", {
-          style: styles.btn, type: "button",
+          className: "dsp-btn", style: styles.btn, type: "button",
           onClick: () => setShowPassword(!showPassword),
         }, showPassword ? "隐藏" : "显示"),
         h("button", {
-          style: styles.btn, type: "button",
+          className: "dsp-btn", style: styles.btn, type: "button",
           onClick: () => copyText("pub-pin", password),
         }, copied === "pub-pin" ? "已复制" : "复制"),
         // 与局域网对称：密码行末尾一个「自定义」（dsh-pocket 的 customBtn 同位置）
         !pubCustomOpen
           ? h("button", {
-              style: styles.btn, type: "button",
+              className: "dsp-btn", style: styles.btn, type: "button",
               onClick: () => { setPubCustomOpen(true); setPubCustomErr(""); },
             }, "自定义")
           : null,
         // 自定义后回不去了 —— 给出「换回随机」出口，否则这个状态是单向的
         publicPinCustom && !pubCustomOpen
           ? h("button", {
-              style: styles.btn, type: "button",
+              className: "dsp-btn", style: styles.btn, type: "button",
               disabled: busy === "pub-random",
               onClick: backToRandomPublic,
             }, busy === "pub-random" ? "换回中…" : "换回随机")
@@ -1063,7 +1150,7 @@ function ServicePortalSettingsTab(props) {
       pubRows.push(h("div", { key: "pub-custom", style: styles.stack },
         h("div", { style: styles.row },
           h("input", {
-            type: "text", value: pubCustomValue, style: styles.input,
+            type: "text", value: pubCustomValue, className: "dsp-input", style: styles.input,
             placeholder: "公网新密码（至少 " + PUBLIC_PIN_MIN + " 位，含字母或符号）",
             autoComplete: "off", maxLength: 64, autoFocus: true,
             onChange: (e) => setPubCustomValue(e.target.value.replace(/\s/g, "")),
@@ -1072,11 +1159,11 @@ function ServicePortalSettingsTab(props) {
               if (e.key === "Escape") { setPubCustomOpen(false); setPubCustomErr(""); }
             },
           }),
-          h("button", { style: styles.primary, type: "button",
+          h("button", { className: "dsp-primary", style: styles.primary, type: "button",
                         disabled: busy === "pub-custom",
                         onClick: savePublicPin },
             busy === "pub-custom" ? "保存中…" : "保存"),
-          h("button", { style: styles.btn, type: "button",
+          h("button", { className: "dsp-btn", style: styles.btn, type: "button",
                         onClick: () => { setPubCustomOpen(false); setPubCustomErr(""); } },
             "取消"),
         ),
@@ -1106,10 +1193,13 @@ function ServicePortalSettingsTab(props) {
       h("div", { style: styles.gapTopSm },
         "地址是随机 trycloudflare 域名，每次开启都会变、关闭或重启后失效，"
         + "并可能被他人复用为陌生网站 —— 请勿收藏，每次从本页扫「当前」二维码。"
-        + "拿到口令的人可以启停你开放的服务，不用时请点上方「关闭公网」。"),
+        // 这里**不能**写"可以启停你开放的服务"：启停能力在 0.8.2 已按用户要求
+        // 取消（只做路由闸门），照抄旧文案会夸大风险、也会让人以为插件能操作进程。
+        + "拿到口令的人可以增删、开放或屏蔽你发布的节点，但动不了上游程序。"
+        + "不用时请点上方「关闭公网」。"),
     ));
-    pubRows.push(h("div", { key: "pub-hint", style: styles.muted },
-      "地址是随机 trycloudflare 域名，每次开启都会变。"));
+    // 上面那块已经讲了"域名每次都变"，这里不再重复一句 ——
+    // 同一屏里两遍同样的话只会让人以为漏看了什么。
   } else {
     pubRows.push(h("div", { key: "pub-none", style: styles.muted },
       running
@@ -1117,7 +1207,12 @@ function ServicePortalSettingsTab(props) {
         : "门户未启动。启动后可以再开一个公网地址（自带口令，域名随机、每次都会变）。"));
   }
 
-  children.push(h("div", { key: "pub", style: styles.block }, pubRows));
+  // 局域网 + 公网：并排放进两栏栅格（同一张页面的两条入口，本来就该并排看）。
+  // 原来它们在同一个 560px 窄柱里竖着叠，两个二维码加两块开关要滚很久。
+  children.push(h("div", { key: "duo", className: "dsp-duo" },
+    h("div", { key: "lan", className: "dsp-pane" }, lanRows),
+    h("div", { key: "pub", className: "dsp-pane" }, pubRows),
+  ));
 
   // ============ 节点管理（对外发布的路由，就在设置页里）============
   //
@@ -1158,7 +1253,7 @@ function ServicePortalSettingsTab(props) {
       const alive = svc.alive !== false;
       const editing = editKey === key;
 
-      svcRows.push(h("div", { key: "svc-" + key, style: styles.svc },
+      svcRows.push(h("div", { key: "svc-" + key, className: "dsp-svc", style: styles.svc },
         h("div", { style: styles.svcHead },
           h("div", { style: styles.row },
             h("span", { style: styles.svcName }, String(svc.name || key)),
@@ -1185,28 +1280,28 @@ function ServicePortalSettingsTab(props) {
         editing
           ? h("div", { key: "svc-edit", style: styles.stack },
               h("div", { style: styles.row },
-                h("input", { style: styles.input, value: editForm.name,
+                h("input", { className: "dsp-input", style: styles.input, value: editForm.name,
                   placeholder: "名称",
                   onChange: (e) => setEditForm(Object.assign({}, editForm,
                     { name: e.target.value })) }),
-                h("input", { style: styles.input, value: editForm.mount,
+                h("input", { className: "dsp-input", style: styles.input, value: editForm.mount,
                   placeholder: "/路由",
                   onChange: (e) => setEditForm(Object.assign({}, editForm,
                     { mount: e.target.value })) }),
               ),
               h("div", { style: styles.row },
-                h("input", { style: styles.input, value: editForm.target,
+                h("input", { className: "dsp-input", style: styles.input, value: editForm.target,
                   placeholder: "127.0.0.1:8810",
                   onChange: (e) => setEditForm(Object.assign({}, editForm,
                     { target: e.target.value })) }),
-                h("input", { style: styles.input, value: editForm.note,
+                h("input", { className: "dsp-input", style: styles.input, value: editForm.note,
                   placeholder: "备注（可选）",
                   onChange: (e) => setEditForm(Object.assign({}, editForm,
                     { note: e.target.value })) }),
               ),
               editErr ? h("div", { style: styles.errInline }, editErr) : null,
               h("div", { style: styles.row },
-                h("button", { style: styles.primary, type: "button",
+                h("button", { className: "dsp-primary", style: styles.primary, type: "button",
                   disabled: busy === "svc-" + key,
                   onClick: async () => {
                     setEditErr("");
@@ -1218,7 +1313,7 @@ function ServicePortalSettingsTab(props) {
                     await serviceAction(key, "update", "保存");
                   } },
                   busy === "svc-" + key ? "保存中…" : "保存"),
-                h("button", { style: styles.btn, type: "button",
+                h("button", { className: "dsp-btn", style: styles.btn, type: "button",
                   onClick: () => { setEditKey(""); setEditErr(""); } }, "取消"),
               ),
             )
@@ -1229,17 +1324,17 @@ function ServicePortalSettingsTab(props) {
                 ? h("a", {
                     href: serviceUrl(svc),
                     target: "_blank", rel: "noreferrer",
-                    style: Object.assign({}, styles.primary,
+                    className: "dsp-primary", style: Object.assign({}, styles.primary,
                       { textDecoration: "none" }),
                   }, "访问")
                 : null,
               // 这就是用户说的「屏蔽 / 开放」：只改路由是否转发，不动上游进程
-              h("button", { style: styles.btn, type: "button",
+              h("button", { className: "dsp-btn", style: styles.btn, type: "button",
                 disabled: !!busy,
                 onClick: () => serviceAction(key,
                   open ? "block" : "open", open ? "屏蔽" : "开放"),
               }, open ? "屏蔽" : "开放"),
-              h("button", { style: styles.btn, type: "button",
+              h("button", { className: "dsp-btn", style: styles.btn, type: "button",
                 disabled: !!busy,
                 onClick: () => {
                   setEditKey(key);
@@ -1250,7 +1345,7 @@ function ServicePortalSettingsTab(props) {
                   });
                 },
               }, "编辑"),
-              h("button", { style: styles.danger, type: "button",
+              h("button", { className: "dsp-danger", style: styles.danger, type: "button",
                 disabled: !!busy,
                 onClick: () => {
                   // 删除是不可撤销的：必须确认
@@ -1276,26 +1371,26 @@ function ServicePortalSettingsTab(props) {
 
     // 添加节点表单（手动填写，不扫描）
     if (addOpen) {
-      svcRows.push(h("div", { key: "add", style: styles.svc },
+      svcRows.push(h("div", { key: "add", className: "dsp-svc", style: styles.svc },
         h("div", { style: styles.cardTitle }, "添加节点"),
         h("div", { style: styles.stack },
           h("div", { style: styles.row },
-            h("input", { style: styles.input, value: addForm.name,
+            h("input", { className: "dsp-input", style: styles.input, value: addForm.name,
               placeholder: "名称，例如：训练配置台", autoFocus: true,
               onChange: (e) => setAddForm(Object.assign({}, addForm,
                 { name: e.target.value })) }),
-            h("input", { style: styles.input, value: addForm.mount,
+            h("input", { className: "dsp-input", style: styles.input, value: addForm.mount,
               placeholder: "/rltrain（对外路径）",
               onChange: (e) => setAddForm(Object.assign({}, addForm,
                 { mount: e.target.value })) }),
           ),
           h("div", { style: styles.row },
-            h("input", { style: styles.input, value: addForm.target,
+            h("input", { className: "dsp-input", style: styles.input, value: addForm.target,
               placeholder: "127.0.0.1:8810（本机端口）",
               onKeyDown: (e) => { if (e.key === "Enter") submitAdd(); },
               onChange: (e) => setAddForm(Object.assign({}, addForm,
                 { target: e.target.value })) }),
-            h("input", { style: styles.input, value: addForm.note,
+            h("input", { className: "dsp-input", style: styles.input, value: addForm.note,
               placeholder: "备注（可选）",
               onChange: (e) => setAddForm(Object.assign({}, addForm,
                 { note: e.target.value })) }),
@@ -1303,7 +1398,7 @@ function ServicePortalSettingsTab(props) {
         ),
         addErr ? h("div", { style: styles.errInline }, addErr) : null,
         h("div", { style: styles.actionRow },
-          h("button", { style: styles.primary, type: "button",
+          h("button", { className: "dsp-primary", style: styles.primary, type: "button",
             disabled: busy === "svc-add", onClick: submitAdd },
             busy === "svc-add" ? "添加中…" : "添加节点"),
         ),
@@ -1327,10 +1422,10 @@ function ServicePortalSettingsTab(props) {
     children.push(h("div", { key: "actions", style: styles.block },
       h("div", { style: styles.sectionTitle }, "门户进程"),
       h("div", { style: styles.actionRow },
-        h("button", { style: styles.danger, type: "button", disabled: !!busy,
+        h("button", { className: "dsp-danger", style: styles.danger, type: "button", disabled: !!busy,
                       onClick: doStop },
           busy === "stop" ? "停止中…" : "停止门户"),
-        h("button", { style: styles.btn, type: "button", onClick: load }, "刷新"),
+        h("button", { className: "dsp-btn", style: styles.btn, type: "button", onClick: load }, "刷新"),
       ),
       h("div", { style: styles.muted },
         "停止后内网 / 公网地址都会失效，设置与口令保留。"),
@@ -1390,7 +1485,7 @@ function ServicePortalSettingsTab(props) {
     return h("span", null, bits.join(" · "));
   }
 
-  const card = h("div", { style: styles.card }, children);
+  const card = h("div", { className: "dsp-card", style: styles.card, padding: "18px 22px" }, children);
   if (!toast) return card;
   // Toast：固定屏幕中央，2.6 秒自动消失（与 dsh-pocket 的反馈方式一致）
   return h("div", null, card, h("div", {

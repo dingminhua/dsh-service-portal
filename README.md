@@ -232,6 +232,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `tools/check_portal_add_route.py` | 12 | 添加节点走**宿主 HTTP 路由**的端到端：真 `createHandler` + 真门户 + 真磁盘；**开放/屏蔽**、反例（`restart` 必须被拒、target 非法必须 400 + 明确 error） |
 | `tools/check_gate_does_not_stop_upstream.py` | 17 | **「屏蔽」不得停止上游进程**（用户最关心的一条）：起真上游进程，验屏蔽后 PID 仍活、绕过门户直连仍通、门户不再转发（404）；删除节点也不动上游 |
 | `tools/check_portal_status_running_services.py` | 6 | **添加节点后设置页看不到**：宿主原来从不去问活门户要服务清单（判据漏了 services），修后能读回；反例——门户没跑时必须空数组，不许编造 |
+| `tools/check_shutdown_self_exit.py` | 8 | **第二次点「停止」失败**：`serve_forever` 先起、关闭钩子晚装，那个窗口里 `/_api/shutdown` 回 503「门户还没就绪」，宿主退到 `--stop` 兜底而兜底在沙箱里杀不掉（`stoppedBy=stop-command`）。含源码顺序断言 + 实测「端口一在听就能自退」 |
 | `tools/check_portal_lan_pin.py` | 23 | 局域网口令刷新/自定义；**公网拿局域网口令能进来**（安全边界）、候选列表没落盘 |
 | `tools/check_portal_form.py` | 8 | **控制台表单提交被当成坏 JSON**（页面上点「添加服务」永远失败）、表单没有 key 字段导致必然失败 |
 | `tools/check_portal_tunnel.py` | 11 | **门户已在跑时「开启公网访问」什么都不做**（幂等检查把建隧道也跳过了）、「关闭公网」把整个门户停掉 |
@@ -309,6 +310,23 @@ node tools\render_panel_preview.mjs          # 打印地址
 它是**人工工具**，不进控制检验（要人看图，没法自动判过），而且有已知局限：
 替身 React 的文本排版不真实（截图里标题与副标题会"看起来压在一起"），
 只适合看结构顺序、颜色、胶囊形状、层级差别。局限写在文件头。
+
+> **它现在能反映真实布局了**（0.8.4 修的）：替身工厂原来把 `className` 当成
+> 字面量属性设上去（`className="..."`），而外观在 0.8.4 起改由注入的 CSS 类承担，
+> 于是预览会画出一个**和真实渲染完全不同**的页面（两栏不并排、hover 没有）。
+> 这种"预览骗人"比没有预览更糟，已改成映射 `className` → `class`。
+
+## 外观：一份注入的 CSS，而不是内联 style
+
+面板的外观（底色、描边、圆角、尺寸、hover、焦点环、窄屏媒体查询）都在
+`client/index.jsx` 顶部的 `CARD_CSS` 里，模块加载时注入一个 `<style>`
+（照 workbuddy 的做法，按 `data-plugin-css` 查重做幂等）。
+
+**为什么不用内联 style**：内联的优先级高于类选择器，连 `:hover` 也压不过它 ——
+内联一旦写了底色，类里的 hover 就成了死代码。而"可点击元素要有按压反馈""键盘
+焦点要可见""窄屏要塌单栏"这三条都只能靠 `:hover` / `:focus-visible` / `@media`
+实现。所以按钮原语的 style 对象是**空的**，颜色与尺寸一律走 `.dsp-*` 类
+（类名统一 `dsp-` 前缀，避免与宿主或其他插件撞车）。
 
 ## 安全边界（必须如实理解）
 

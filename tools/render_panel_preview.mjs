@@ -149,6 +149,11 @@ function render(v, inst) {
     if (["style", "children", "key"].includes(k)) continue;
     if (val === undefined || val === null || val === false) continue;
     if (k.startsWith("on") && typeof val === "function") el.addEventListener(k.slice(2).toLowerCase(), val);
+    // 注意：className 必须映射成 class，否则会变成一个**字面量 className 属性**，
+    // 样式类完全不生效 —— 本仓库改成"外观走注入 CSS + className"之后，
+    // 预览就会画出一个**和真实渲染完全不同**的页面（栅格不并排、hover 没有）。
+    // 这种"预览骗人"比没有预览更糟，所以这里必须与 React 的行为一致。
+    else if (k === "className") el.setAttribute("class", val);
     else el.setAttribute(k, val === true ? "" : val);
   }
   (v.kids || []).forEach((k) => el.appendChild(render(k, inst)));

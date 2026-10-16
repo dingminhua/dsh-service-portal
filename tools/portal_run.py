@@ -890,6 +890,57 @@ def run_portal(args):
             print("    python -X utf8 tools/portal_run.py --stop", file=sys.stderr)
             print("或显式换端口：--port 18899", file=sys.stderr)
         return 3
+    # ---- 关闭流程：必须在**开始接受请求之前**就装好 ----
+    #
+    # 踩过的真 bug（用户重启 DSH 后 test_host_buttons 从 SKIP 变 FAIL 才暴露）：
+    # 原来 `serve_forever` 先起（端口开始监听），而 `shutdown_holder["fn"]`
+    # 晚得多才赋值 —— 中间还夹着隧道建立和一次可能重试 ~2 秒的 save_state
+    # （实测沙箱里写 runs/ 会 Errno 13）。于是在那个窗口里：
+    #   · 宿主看端口在听 -> 认为"运行中"，设置页可点「停止」；
+    #   · 点下去 POST /_api/shutdown -> 命中 `fn is None` -> **503「门户还没就绪」**；
+    #   · 宿主判 asked=false -> 退到 `portal_run.py --stop` 兜底；
+    #   · 而兜底那个子进程在沙箱里 taskkill 看不见门户、又读不到状态文件，
+    #     回一句"门户未在运行" —— 结果就是**第二次停止失败**：报错、门户还活着。
+    #
+    # 修法：把 stopped / shutdown / signal / shutdown_holder 全部提前，
+    # 让"端口开始监听"与"能接受关闭请求"**同时成立**，消灭这个窗口。
+    stopped = {"flag": False}
+
+    def shutdown(*_):
+        # 可能被信号处理器（主线程）或 /_api/shutdown 的 Timer 线程调用，防重入
+        if stopped["flag"]:
+            return
+        stopped["flag"] = True
+        print("\n正在停止…")
+        # 不再停任何"服务进程"：本插件不管理上游程序（见上面"服务进程管理"说明）。
+        # 上游该由它自己的启动方式去停 —— 我们只负责把门户关掉。
+        proc = tunnel_proc["proc"]
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        # 用 mark_stopped() 而不是 clear_state()：状态文件里存着**要留存的偏好**
+        # （局域网口令、自定义标记、网卡候选、手动选的地址）。删掉它，
+        # 「局域网口令重启后不变」就失效了，用户手机里存过的口令也白存。
+        mark_stopped()
+        server.shutdown()
+        print("已停止。")
+        sys.stdout.flush()
+        # 从信号处理器（主线程）里 sys.exit 会把进程带出去；但从 HTTP 的
+        # Timer 线程里 exit 只结束那个线程 —— 实测结果是"端口松了、进程还在"。
+        # 所以主线程那条路交给下面的 while 条件退出。
+        if threading.current_thread() is threading.main_thread():
+            sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    # 让 POST /_api/shutdown 也能走到同一个关闭流程（见 api_handler 里的说明）
+    shutdown_holder["fn"] = shutdown
+    try:
+        signal.signal(signal.SIGTERM, shutdown)
+    except (AttributeError, ValueError):
+        pass
+
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     # ---- 隧道（复用 start_tunnel_now，避免同一段逻辑写两份）----
@@ -944,42 +995,7 @@ def run_portal(args):
     print("=" * 66)
     sys.stdout.flush()
 
-    stopped = {"flag": False}
-
-    def shutdown(*_):
-        # 可能被信号处理器（主线程）或 /_api/shutdown 的 Timer 线程调用，防重入
-        if stopped["flag"]:
-            return
-        stopped["flag"] = True
-        print("\n正在停止…")
-        # 不再停任何"服务进程"：本插件不管理上游程序（见上面"服务进程管理"说明）。
-        # 上游该由它自己的启动方式去停 —— 我们只负责把门户关掉。
-        proc = tunnel_proc["proc"]
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-        # 用 mark_stopped() 而不是 clear_state()：状态文件里存着**要留存的偏好**
-        # （局域网口令、自定义标记、网卡候选、手动选的地址）。删掉它，
-        # 「局域网口令重启后不变」就失效了，用户手机里存过的口令也白存。
-        mark_stopped()
-        server.shutdown()
-        print("已停止。")
-        sys.stdout.flush()
-        # 从信号处理器（主线程）里 sys.exit 会把进程带出去；但从 HTTP 的
-        # Timer 线程里 exit 只结束那个线程 —— 实测结果是"端口松了、进程还在"。
-        # 所以主线程那条路交给下面的 while 条件退出。
-        if threading.current_thread() is threading.main_thread():
-            sys.exit(0)
-
-    signal.signal(signal.SIGINT, shutdown)
-    # 让 POST /_api/shutdown 也能走到同一个关闭流程（见 api_handler 里的说明）
-    shutdown_holder["fn"] = shutdown
-    try:
-        signal.signal(signal.SIGTERM, shutdown)
-    except (AttributeError, ValueError):
-        pass
+    # 关闭流程已在上面（开始接受请求之前）装好 —— 见那段注释里说明的竞态。
 
     try:
         # server.shutdown() 之后 serve_forever 返回，但主线程还停在这个循环里，

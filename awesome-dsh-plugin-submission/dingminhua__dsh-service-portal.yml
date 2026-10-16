@@ -2,5 +2,5 @@ url: https://github.com/dingminhua/dsh-service-portal
 name: dingminhua/dsh-service-portal
 category: remote
 description:
-  en: Exposes local services through both LAN and a public cloudflared tunnel, guarded by a password login (random or fixed) and managed from a built-in web console.
-  zh: 内网加外网两种入口，一个口令登录（可随机可固定）把本机服务按需开放到外网，自带网页控制台管理服务与路由。
+  en: 'Exposes any local service on a LAN address and a public cloudflared quick-tunnel domain behind one password login, with per-route open/block gates managed from the plugin settings page.'
+  zh: '把一个口令登录的内网地址与公网 cloudflared 快速隧道域名提供给本机任意服务，每条路由的开放/屏蔽闸门在插件设置页里管理。'

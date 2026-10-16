@@ -51,13 +51,19 @@ def main():
           "（距离标题行 900 字符内）")
     # 灰色 + 下划线（用户要的是低调灰，不要品牌蓝）。
     # 注意：这里原来钉的是 `var(--dsw-alias-label-tertiary,#8b93a1)` —— 而那个
-    # 令牌**根本不存在**，等于一直在吃写死的灰。现在改用真实令牌 label-secondary，
-    # 所以这条断言改成看"意图"（灰 + 下划线 + 不是品牌蓝），不再绑具体令牌名。
+    # 令牌**根本不存在**，等于一直在吃写死的灰。改用真实令牌 label-secondary 后，
+    # 断言改成看"意图"（灰 + 下划线 + 不是品牌蓝），不绑具体令牌名。
+    #
+    # 外观已迁到注入的 CARD_CSS（.dsp-link）—— 内联样式做不了 :hover。
+    # 所以这里同时接受两种写法：类里定义，或内联定义。
+    _link_css = ".dsp-link{" in client and "text-decoration:underline" in client
     check("灰色（非品牌蓝）+ 下划线（与截图一致）",
-          'color: COLOR.textMuted' in client
-          and 'textDecoration: "underline"' in client
-          and "creditLink" in client,
+          _link_css
+          or ('color: COLOR.textMuted' in client
+              and 'textDecoration: "underline"' in client),
           "（不要品牌蓝 —— 用户要的是低调灰）")
+    check("「鼓励一下」链接有 hover 反馈（内联做不到，必须在类里）",
+          ".dsp-link:hover" in client)
     check("没有长鼓励文案残留",
           "顺手留颗 Star" not in client and "高兴一整天" not in client
           and "给你一颗 Star" not in client and "开发者：" not in client,
@@ -121,11 +127,19 @@ def main():
           "running ? styles.warn : styles.muted" in client
           and "key: \"prob\"" in client,
           "（用户自己停的也算正常状态）")
-    check("未启动时不显示「拿到口令的人可以…」警示（还轮不到）",
-          # 现在警示按**实际状态**出现，且公网风险已合并进「公网访问」区块
-          # （用户管理公网的地方），页尾只留"局域网免密"这一条跨区块的全局提示。
-          # 断言它的守卫与去重：底部只在 running && 免密 时出现，且不重复提公网。
-          client.count("拿到口令的人可以启停你开放的服务") == 1
+    check("未启动时不显示公网风险警示（还轮不到）",
+          # 警示按**实际状态**出现，且公网风险已合并进「公网访问」区块
+          # （用户管理公网的地方），页尾只留"局域网免密"这一条跨区块全局提示。
+          #
+          # 文案在 0.8.2 改过：原文写「拿到口令的人可以**启停**你开放的服务」，
+          # 而启停能力已按用户要求取消（只做路由闸门）—— 照抄旧文案会**夸大风险**，
+          # 也会让人以为这个插件能操作进程。现在如实说"增删/开放/屏蔽节点，
+          # 但动不了上游程序"。
+          #
+          # 判据必须是**字符串字面量**而不是裸文本：旧说法还留在注释里
+          # （用来说明"为什么不能这么写"），按裸文本判会误报。
+          client.count('"拿到口令的人可以增删、开放或屏蔽你发布的节点') == 1
+          and '"拿到口令的人可以启停你开放的服务' not in client
           and "if (running && lanAuth === false) {" in client
           and "公网暴露风险" in client)
     check("停止失败要报出来（宿主回 ok:false + stderr 时不能静默）",
@@ -403,7 +417,10 @@ def main():
     check("门户进程那段有小标题（与「服务」同级，读起来是两块）",
           '"门户进程"' in client)
     check("底部不再重复公网风险（与公网区块同主题，去重）",
-          client.count("拿到口令的人可以启停你开放的服务") == 1)
+          # 同一句话在整份客户端里只应出现一次（重复讲同一件事会显得页面在啰嗦）
+          client.count("拿到口令的人可以增删、开放或屏蔽你发布的节点") == 1
+          # 顺带钉住"不再重复域名每次会变"那句（公网区块已讲过）
+          and client.count("地址是随机 trycloudflare 域名，每次开启都会变") == 1)
     check("未开公网时不再教用户「点关闭公网」（那个按钮那时不在）",
           "不用时请点上方「关闭公网」" in client
           and "children.push(h(\"div\", { key: \"warn\", style: styles.warn }," not in client)
@@ -446,9 +463,51 @@ def main():
           "registry.remove(key)" in run and "supervisor.stop" not in run)
     check("每个节点有「访问」", '"访问"' in client and "serviceUrl" in client)
     check("地址行「复制」旁也有「访问」（局域网 + 公网共 2 处）",
-          client.count("style: styles.accessLink") == 2)
+          client.count('className: "dsp-access"') == 2)
     check("「访问」链接用品牌色描边（与「复制」区分开）",
-          "accessLink:" in client and "border: \"1px solid \" + COLOR.brand" in client)
+          # 外观在 .dsp-access 类里（内联压不过 :hover，所以必须迁过去）
+          ".dsp-access{" in client
+          and "border:1px solid var(--dsw-alias-brand-primary" in client)
+
+    # ---- 宽度适配 + 交互态（用户：「宽度变了…设计美观的细节完善一下」）----
+    #
+    # 背景：注册位置从「宿主设置的一整页」改成「插件页的配置区」后，可用宽度
+    # 从 560 变成约 900–1000。原来写死的 maxWidth:560 于是在宽栏里缩成一条窄柱
+    # （二维码挤中间、右侧大片留白）——用户截图就是这个。
+    print("\n[⑤b 宽度适配：用满插件页宽度 + 交互态与响应式]")
+    check("卡片**不再**写死 maxWidth 560（宽栏里会缩成窄柱）",
+          "maxWidth: 560" not in client)
+    check("卡片用满可用宽度且有上限（避免行长过长）",
+          'max-width:880px' in client and "maxWidth: 880" not in client)
+    check("局域网/公网两栏并排（原来在窄柱里竖着叠，两个二维码要滚很久）",
+          ".dsp-duo{" in client and "grid-template-columns" in client
+          and "auto-fit" in client)
+    check("窄屏塌成单栏（窄面板/手机上不能两栏硬挤）",
+          "@media (max-width:720px)" in client and "grid-template-columns:1fr" in client)
+    check("窄屏二维码缩小（176 在手机上会占掉半屏）",
+          ".dsp-qr{width:132px;height:132px}" in client)
+    check("注入的是真实 <style>（内联做不了 hover/@media）",
+          "document.createElement(\"style\")" in client
+          and "document.head.appendChild" in client)
+    check("样式注入是幂等的（重新挂载不会越堆越多）",
+          "data-plugin-css" in client and "querySelector" in client)
+    check("**按钮有 hover 与 disabled 视觉**（规范：可点击元素要有按压反馈）",
+          ".dsp-primary:hover" in client and ":disabled" in client)
+    check("**键盘焦点可见**（规范：focus-visible）",
+          ":focus-visible" in client and "outline:2px solid" in client)
+    check("尊重 prefers-reduced-motion（规范要求）",
+          "prefers-reduced-motion:reduce" in client)
+    check("类名统一 dsp- 前缀（不与宿主/别的插件撞车）",
+          client.count("dsp-") >= 20)
+    check("**按钮外观不再内联**（内联会压死类里的 hover，白写）",
+          # 只针对需要交互态的四个按钮原语：底部背景/描边必须只在类里。
+          # warnBox/tag/svcMount 那些是静态装饰（没有 hover 语义），
+          # 内联它们的底色是合理的，不在此列。
+          client.count("background: COLOR.brand") == 0
+          and "styles.primary = {" not in client
+          and "primary: {}," in client
+          and "btn: {}," in client
+          and "danger: {}," in client)
     check("**自动发现已删掉**（界面/接口都没了）",
           "discover" not in client.lower() and "discover" not in host.lower()
           and "/discover" not in run)

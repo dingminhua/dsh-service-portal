@@ -2,7 +2,7 @@
   "name": "dsh-service-portal",
   "displayName": "DSH Service Portal",
   "description": "对外服务门户：装好即用，设置页内网/公网二维码扫码进控制台管理服务与路由（cloudflared 隧道 + 口令登录，内网免密可开密码、外网必须口令）。",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "author": "dingminhua",
   "copyright": "Copyright (c) 2026 LaoDing",
   "license": "MIT",

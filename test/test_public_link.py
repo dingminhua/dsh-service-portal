@@ -156,15 +156,24 @@ def main():
           "code=%s" % code)
 
     # 4. 本机（loopback）仍然免密可用
+    #
+    # 判据在 0.8.2 改过：门户页已按用户要求改成**只读**的测试页+引导页，
+    # 原来那条断言看的是 `name="mount"`（添加服务表单的字段），表单已删除，
+    # 于是"免密可见"这件事**换了个判据**：
+    #   · 必须是门户页（不是登录页）：出现页面标题「对外服务门户」；
+    #   · 且**没有**口令输入框（那才是"免密"的意思）。
+    # 不能简单地把断言删掉 —— 那会让"本机/内网免密"这条安全边界失去守卫。
     code, body = fetch("http://127.0.0.1:%d/" % PORT)
-    check("本机访问免密直接见控制台",
-          'name="mount"' in body, "code=%s" % code)
+    check("本机访问免密直接见门户页（不是登录页）",
+          "对外服务门户" in body and 'name="password"' not in body,
+          "code=%s" % code)
 
     # 5. 本机内网 IP 免密（同一 WiFi 手机可用）
     code, body = fetch("http://192.168.71.10:%d/" % PORT,
                        host="192.168.71.10:%d" % PORT)
-    check("内网 IP 免密直接见控制台（手机可达）",
-          'name="mount"' in body, "code=%s" % code)
+    check("内网 IP 免密直接见门户页（手机可达）",
+          "对外服务门户" in body and 'name="password"' not in body,
+          "code=%s" % code)
 
     # 6. 畸形 Host -> fail-closed（要求口令，不是免密）
     code, body = fetch("http://127.0.0.1:%d/" % PORT, host="garbage value")
