@@ -560,69 +560,57 @@ thead{text-align:left}
 """
 
 
-def _service_form():
-    return ('<form method="POST" action="/_api/services" class="add">'
-            '<label>名称（必填）</label><input name="name" required '
-            'placeholder="例如：训练配置台" maxlength="40">'
-            '<label>路由路径（以 / 开头，例如 /train）</label>'
-            '<input name="mount" required placeholder="/train" maxlength="40">'
-            '<label>上游地址（例如 127.0.0.1:8810）</label>'
-            '<input name="target" required placeholder="127.0.0.1:8810" maxlength="80">'
-            '<label>备注（可选）</label><input name="note" maxlength="200">'
-            '<button type="submit" class="btn primary">添加服务</button></form>')
-
-
 def _service_card(svc, public_url):
+    """一个节点的**只读**卡片（测试页 + 引导页用）。
+
+    用户要求：门户页面只读 —— "相当于一个测试页和引导页，没有设置功能"。
+    所以这里**不再**渲染任何管理表单/按钮：
+      · 没有「开启/关闭」（那是路由闸门，只在插件设置里改）；
+      · 没有「编辑」「删除」；
+      · 保留「访问」——那正是"测试这个节点通不通"的动作。
+    """
     name = escape_html(svc.get("name") or svc.get("key") or "")
     mount = escape_html(svc.get("mount") or "")
     target = escape_html(svc.get("target") or "")
     note = escape_html(svc.get("note") or "")
-    key = escape_html(svc.get("key") or "")
-    enabled = bool(svc.get("enabled"))
+    open_ = bool(svc.get("enabled"))
     alive = bool(svc.get("alive"))
     mount_val = svc.get("mount") or ""
-    if enabled:
-        dot = "on"
-        status = "已启用"
-    elif alive is False:
-        dot = "dead"
-        status = "存活探测失败"
+
+    # 状态语义要说清**两件事**：这条路是否开放（门户转不转发）、上游是否响应。
+    # 早先只判 enabled，于是上游死了仍显示绿色「已启用」—— 用户点了访问得到
+    # 502，却看不出原因。
+    if not open_:
+        dot, status = "off", "已屏蔽（门户不转发）"
+    elif alive:
+        dot, status = "on", "开放中"
     else:
-        dot = "off"
-        status = "未启用"
-    # 未启用时访问链接**不得**可点：改用不可点 span，绝不产生 <a>
-    if enabled:
-        # mount_val 已经带前导斜杠（注册表规范化为 /train），这里只补尾部的一个，
-        # 不能写 "href=\"%s/\"" 再传 mount_val + "/" —— 那会生成 /train// 双斜杠，
-        # 某些代理/浏览器会规范化成重定向，链接难看且行为不确定。
+        dot, status = "dead", "开放中 · 上游未响应"
+
+    if open_:
+        # mount_val 已经带前导斜杠，这里只补尾部一个，避免 /train// 双斜杠
         visit = ('<a class="btn primary" href="%s">访问</a>'
                  % escape_html(mount_val.rstrip("/") + "/"))
     else:
-        visit = '<span class="btn dim" aria-disabled="true" title="未启用不可访问">访问</span>'
+        visit = ('<span class="btn dim" aria-disabled="true" '
+                 'title="该节点已被屏蔽，门户不会转发">访问</span>')
+
     rows = []
     rows.append('<div class="card"><div class="top">'
                 '<div><h3>%s</h3>'
                 '<span class="dot %s"></span>%s '
                 '<span class="mono">%s</span></div></div>'
-                % (name, dot, status[:8], mount))
-    rows.append('<div class="meta">路由：<span class="mono">%s</span> · '
-                '上游：<span class="mono">%s</span></div>' % (mount, target))
+                % (name, dot, status, mount))
+    rows.append('<div class="meta">对外路径：<span class="mono">%s</span> · '
+                '转发到：<span class="mono">%s</span></div>' % (mount, target))
     if note:
         rows.append('<div class="meta">注：%s</div>' % note)
-    enable_action = ("/_api/services/%s/enable" % urllib_quote(key)
-                     if enabled is False else "/_api/services/%s/disable" % urllib_quote(key))
-    enable_label = "关闭" if enabled else "开启"
-    ebtn = ('<form method="POST" action="%s" style="display:inline">'
-            '<button type="submit" class="btn %s">%s</button></form>'
-            % (escape_html(enable_action),
-               "primary" if not enabled else "", enable_label))
-    del_btn = ('<form method="POST" action="/_api/services/%s/delete" '
-               'onsubmit="return confirm(\'删除该服务？\')" style="display:inline">'
-               '<button type="submit" class="btn">删除</button></form>'
-               % escape_html(urllib_quote(key)))
-    edit_btn = ('<a class="btn" href="/_api/services/%s/edit">编辑</a>'
-                % escape_html(urllib_quote(key)))
-    rows.append('<div class="actions">%s%s%s%s</div>' % (ebtn, visit, edit_btn, del_btn))
+    # 上游没响应时把"该怎么办"直接写出来：这是测试页最有价值的一句话
+    if open_ and not alive:
+        rows.append('<div class="warn">上游 %s 没有响应 —— 请用它自己的方式'
+                    '启动该程序（本页只负责转发）。</div>'
+                    % escape_html(target))
+    rows.append('<div class="actions">%s</div>' % visit)
     rows.append('</div>')
     return "".join(rows)
 
@@ -668,12 +656,12 @@ def console_html(state, *, is_public=False, extra_head=""):
     else:
         qr_img = '<p class="note">暂无地址，未生成二维码。</p>'
 
-    # 服务列表
+    # 节点列表（只读）
     if services:
         cards = "".join(_service_card(s, public_url) for s in services)
     else:
-        cards = ('<p class="note">还没有服务。在下方添加第一个服务后，它就会出现在这里，'
-                 '并可逐个开启对外访问。</p>')
+        cards = ('<p class="note">还没有节点。到 DSH 的「设置 → 对外服务门户」里'
+                 '点「添加节点」把本机的一个端口发布出来，这里就会列出来。</p>')
     # 空态面板仍展示在服务列表标题
     list_block = ('<div class="grid">%s</div>' % cards) if (cards.startswith('<div class="card"')) \
         else cards
@@ -681,16 +669,23 @@ def console_html(state, *, is_public=False, extra_head=""):
     html = ('<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             '<meta name="robots" content="noindex,nofollow">'
-            '<title>对外服务门户 · 控制台</title><style>%s</style></head><body>'
+            '<title>对外服务门户</title><style>%s</style></head><body>'
             '<div class="wrap">'
             '<h1>对外服务门户</h1>'
-            '<p class="sub">在下方管理要对外开放的服务：加路由、开启关闭、跳转访问。'
-            '当前分类：<strong>%s</strong> · 端口 %d</p>'
+            '<p class="sub">这里能打开本机已发布的节点。当前分类：'
+            '<strong>%s</strong> · 端口 %d</p>'
             '<!-- 由 console_html 渲染，勿手改。用户输入均经转义。 -->'
             '%s'
             '<section><h2>访问地址</h2>%s%s</section>'
-            '<section><h2>服务清单</h2>%s</section>'
-            '<section><h2>添加服务</h2>%s</section>'
+            '<section><h2>已发布的节点</h2>%s</section>'
+            '<section><h2>怎么管理</h2>'
+            '<p class="note">这个页面是<b>只读</b>的测试页与入口页：点上面的「访问」'
+            '就能试每个节点通不通。<br>'
+            '要<b>添加节点、开放或屏蔽、改路由</b>，请到 DSH 里打开'
+            '<b>设置 → 对外服务门户</b> —— 那里是唯一的设置入口。</p>'
+            '<p class="note">「屏蔽」只表示门户不再转发这条路由，'
+            '<b>不会</b>停止上游程序；上游请用它自己的方式启动。</p>'
+            '</section>'
             '<footer>安全提示：外网访问需要口令；内网免密。门户端口 %d，'
             '当前分类：%s。请不要在公网长期暴露管理口令。</footer>'
             '</div>'
@@ -702,7 +697,7 @@ def console_html(state, *, is_public=False, extra_head=""):
             '});});</script>'
             '</body></html>'
             % (_CSS, escape_html(tag), int(portal_port),
-               extra_head, addr_html, qr_img, list_block, _service_form(),
+               extra_head, addr_html, qr_img, list_block,
                int(portal_port), escape_html(tag))).encode("utf-8")
     return html
 

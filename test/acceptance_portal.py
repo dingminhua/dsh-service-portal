@@ -119,9 +119,13 @@ def main():
         status, body, _ = call("/", LAN_HOST)
         check("①a 控制台可打开（内网免密）",
               status == 200 and "对外服务门户".encode() in body)
-        check("①b 控制台含添加服务表单",
-              b'name="name"' in body and b'name="mount"' in body
-              and b'name="target"' in body)
+        # 门户页现在是**只读**的测试页 + 引导页（用户要求：没有设置功能）。
+        # 原来这里断言"含添加服务表单"，那是旧设计 —— 管理已搬到插件设置里了。
+        check("①b 门户页是只读的（没有添加表单）",
+              b'name="name"' not in body and b'name="mount"' not in body
+              and b"<form" not in body)
+        check("①b2 门户页引导去插件设置里管理",
+              "设置 → 对外服务门户".encode() in body)
 
         status, body, _ = call("/_api/services", LAN_HOST, method="POST",
                                data=json.dumps({

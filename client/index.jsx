@@ -316,19 +316,15 @@ const styles = {
     border: "1px solid " + COLOR.border, borderRadius: 6,
     padding: "1px 6px", whiteSpace: "nowrap",
   },
-  // 发现候选的一行：左侧勾选框 + 中间信息 + 右侧风险标签
-  discRow: {
-    display: "flex", gap: SPACE.row, alignItems: "flex-start",
-    padding: `${SPACE.inline + 2}px 0`, borderTop: "1px solid " + COLOR.border,
-  },
-  // 危险档的说明文字（红）；谨慎档（黄）复用 warnInline
-  dangerText: { color: COLOR.error, fontSize: TYPE.caption, lineHeight: LINE.body },
-  // 勾选框：默认勾选态用品牌色，尺寸给足（手机上也好点）。
-  // 顶部对齐不用裸的 marginTop —— 本项目禁止行内写裸间距数字（同一面板里
-  // 会冒出 8/10/14 三种"差不多"的值），改用对齐方式解决。
-  check: {
-    width: 15, height: 15, flex: "0 0 auto", cursor: "pointer",
-    alignSelf: "flex-start",
+  // 「访问」链接：沿用 btn 的观感但用 brand 色描边，与「复制」区分开
+  // （复制是"拿走地址"，访问是"点开看"，两者不同）
+  accessLink: {
+    font: "inherit", cursor: "pointer", textDecoration: "none",
+    border: "1px solid " + COLOR.brand, background: "transparent",
+    color: COLOR.brand,
+    height: 32, padding: "0 14px", borderRadius: 999,
+    fontSize: TYPE.body, lineHeight: 1,
+    display: "inline-flex", alignItems: "center", whiteSpace: "nowrap",
   },
 };
 
@@ -417,14 +413,14 @@ function ServicePortalSettingsTab() {
   const [lanNote, setLanNote] = React.useState("");
   // ============ 服务管理（原控制台的功能，搬进设置页）============
   //
-  // 用户要求：「在插件设置里把控制台的功能做了，就不需要独立控制台了」——
-  // 刷新服务、自动发现、手动添加。
+  // 用户要求：在插件设置里管理"节点"（对外发布的路由），不再需要独立控制台。
   //
   // 状态说明：
-  //   services     —— 服务清单（来自 status.services，随 5 秒轮询自动刷新）
-  //   addOpen      —— 手动添加表单是否展开
-  //   discovered   —— 自动发现的候选（点了「自动发现」才有；null = 还没点过）
-  //   picked       —— 发现结果里被勾选的端口集合（**危险项默认不勾**）
+  //   services  —— 节点清单（来自 status.services，随 5 秒轮询自动更新）
+  //   addOpen   —— 手动添加表单是否展开
+  //
+  // 已按用户要求删掉的：自动发现（"取消自动发现服务的功能"）、
+  // 「刷新」按钮（"不用刷新也不用搜索"）。清单本来就会自动更新。
   const [addOpen, setAddOpen] = React.useState(false);
   const [addForm, setAddForm] = React.useState(
     { name: "", mount: "", target: "", note: "" });
@@ -433,9 +429,6 @@ function ServicePortalSettingsTab() {
   const [editForm, setEditForm] = React.useState(
     { name: "", mount: "", target: "", note: "" });
   const [editErr, setEditErr] = React.useState("");
-  const [discovered, setDiscovered] = React.useState(null);
-  const [discoverErr, setDiscoverErr] = React.useState("");
-  const [picked, setPicked] = React.useState({});
   // Toast：操作后的即时反馈
   const [toast, setToast] = React.useState("");
 
@@ -505,31 +498,20 @@ function ServicePortalSettingsTab() {
   React.useEffect(() => { if (publicUrl && !qrs[publicUrl]) loadQr(publicUrl); },
     [publicUrl]);
 
-  // ---- 服务管理：增删启停 / 自动发现 ----
+  // ---- 节点管理：添加 / 开放屏蔽 / 编辑 / 删除 ----
   //
   // 全部走宿主的转发路由（宿主再转给门户）。为什么不让面板直接打门户：
   // 面板在 DSH 的浏览器上下文里，而门户可能因为「局域网访问已关闭」或
   // 口令而被拦；走宿主就没这层不确定性（宿主永远从 127.0.0.1 调门户）。
   const services = (status && status.services) || [];
 
-  const reloadServices = async () => {
-    setBusy("services");
-    try {
-      const r = await request("/services");
-      if (r && r.ok && Array.isArray(r.services)) {
-        setStatus((prev) => (prev ? Object.assign({}, prev, {
-          services: r.services,
-          servicesAlive: true,
-          servicesDegraded: r.services.filter(
-            (s) => s && s.enabled && s.alive === false).length,
-        }) : prev));
-      } else {
-        throw new Error((r && r.error) || "取服务清单失败");
-      }
-      showToast("已刷新服务清单");
-    } catch (e) {
-      setError(String(e && e.message ? e.message : e));
-    } finally { setBusy(""); }
+  // 节点的「访问」地址：门户地址 + 路由路径。
+  // 为什么用门户地址拼而不是上游地址：用户要的是"点一下就能用这个服务"，
+  // 而对外可用的入口是**门户的路由**（上游 127.0.0.1:2460 只有本机能开）。
+  const serviceUrl = (svc) => {
+    const base = (status && status.portalUrl) || ("http://127.0.0.1:" + port);
+    const mount = String((svc && svc.mount) || "").replace(/^\//, "");
+    return mount ? base + "/" + mount + "/" : base;
   };
 
   const submitAdd = async () => {
@@ -564,69 +546,11 @@ function ServicePortalSettingsTab() {
       const r = await request("/services/" + encodeURIComponent(key) + "/" + action,
         "POST", action === "update" ? editForm : {});
       if (!r || r.ok !== true) throw new Error((r && r.error) || (label + "失败"));
-      // 门户可能回了 warning（比如"端口没起来，但开关已置位"）—— 不能吞掉：
-      // 用户会看到开关"开了"却访问不通，必须知道原因。
-      if (r.warning) showToast(label + "：但" + r.warning);
-      else showToast(label + "成功");
-      if (action === "delete") { /* 无需额外处理 */ }
+      showToast(label + "成功");
       if (action === "update") setEditKey("");
       await load();
     } catch (e) {
       setError(String(e && e.message ? e.message : e));
-    } finally { setBusy(""); }
-  };
-
-  const runDiscover = async () => {
-    setDiscoverErr("");
-    setDiscovered(null);
-    setPicked({});
-    setBusy("discover");
-    try {
-      const r = await request("/discover");
-      if (!r || r.ok !== true) throw new Error((r && r.error) || "扫描失败");
-      setDiscovered(Array.isArray(r.candidates) ? r.candidates : []);
-      // 默认**只勾选 ok 档**；caution 与 danger 交给用户显式决定。
-      // 这是本功能最重要的安全设计：发现结果里实测存在 DSH 自身、代理、
-      // 远程控制软件，误勾一个就可能把它们挂到公网。
-      const pre = {};
-      for (const c of (r.candidates || [])) {
-        if (c && c.level === "ok") pre[c.port] = true;
-      }
-      setPicked(pre);
-    } catch (e) {
-      setDiscoverErr(String(e && e.message ? e.message : e));
-    } finally { setBusy(""); }
-  };
-
-  const addPicked = async () => {
-    const chosen = (discovered || []).filter((c) => picked[c.port]);
-    if (!chosen.length) { setDiscoverErr("先勾选要添加的候选"); return; }
-    setBusy("discover-add");
-    setDiscoverErr("");
-    const failed = [];
-    try {
-      for (const c of chosen) {
-        const mount = "/" + String(c.proc || ("port" + c.port))
-          .replace(/\.[a-z]+$/i, "").replace(/[^A-Za-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "").toLowerCase().slice(0, 24) || ("port" + c.port);
-        const r = await request("/services/add", "POST", {
-          name: c.name || ("端口 " + c.port),
-          mount,
-          target: c.target,
-          note: "自动发现（" + (c.evidence || c.proc || "") + "）",
-        });
-        if (!r || r.ok !== true) failed.push(c.port + "：" + ((r && r.error) || "失败"));
-      }
-      if (failed.length) {
-        setDiscoverErr("部分没加上 —— " + failed.join("；"));
-      } else {
-        showToast("已添加 " + chosen.length + " 个服务");
-        setDiscovered(null);
-        setPicked({});
-      }
-      await load();
-    } catch (e) {
-      setDiscoverErr(String(e && e.message ? e.message : e));
     } finally { setBusy(""); }
   };
 
@@ -902,8 +826,13 @@ function ServicePortalSettingsTab() {
             }, h("span", { style: styles.muted }, "已关闭")),
         // 地址 + 复制：扫码是「用手机接过去」，复制是「贴到聊天窗发出去」，
         // 两条路都要留（用户明确要求地址可复制）。
+        // 「访问」放在「复制」旁边（用户要求）：复制是贴给别人，访问是自己点开看。
         h("div", { style: styles.addrRow },
           h("code", { style: styles.code }, lanPrimary),
+          h("a", {
+            href: lanPrimary, target: "_blank", rel: "noreferrer",
+            style: styles.accessLink,
+          }, "访问"),
           h("button", {
             style: styles.btn, type: "button",
             onClick: () => copyText("lan", lanPrimary),
@@ -1064,6 +993,11 @@ function ServicePortalSettingsTab() {
           }, h("span", { style: styles.muted }, "二维码生成中…")),
       h("div", { style: styles.addrRow },
         h("code", { style: styles.code }, publicUrl),
+        // 「访问」与「复制」并排（用户要求），公网这边同样
+        h("a", {
+          href: publicUrl, target: "_blank", rel: "noreferrer",
+          style: styles.accessLink,
+        }, "访问"),
         h("button", {
           style: styles.btn, type: "button",
           onClick: () => copyText("public", publicUrl),
@@ -1173,44 +1107,43 @@ function ServicePortalSettingsTab() {
 
   children.push(h("div", { key: "pub", style: styles.block }, pubRows));
 
-  // ============ 服务管理（原控制台的功能，现在就在设置页里）============
+  // ============ 节点管理（对外发布的路由，就在设置页里）============
   //
-  // 用户要求：「在插件设置里，能把控制台的功能做了吗？这样就不需要独立控制台了，
-  // 在插件设置里提供刷新当前系统服务、自动发现、手动添加某个服务这种功能」。
+  // 用户的要求（原话）：
+  //   · 「我们添加的节点是做在插件设置里的，每个节点都有屏蔽和开放的开关，
+  //      不是服务开启的开关」—— 开关是**路由闸门**，不是启停上游程序；
+  //   · 「启动服务是服务本身的事情，这里只是负责可以路由」；
+  //   · 「每个设置的服务都要有一个点击直接打开的功能叫做访问」；
+  //   · 「取消自动发现服务的功能，不用刷新也不用搜索，就是人手动添加端口」。
   //
-  // 所以这一块**不是**"打开控制台的入口"，而是控制台本身的替代：
-  //   刷新服务清单 / 逐个启停删除编辑 / 自动发现候选 / 手动添加。
-  // 服务清单来自 status.services（宿主 /status 转发门户），随 5 秒轮询自动更新；
-  // 「刷新」按钮是给用户一个"立刻要最新"的确定动作（不必等下一次轮询）。
+  // 所以这一块只有三件事：添加节点 / 开放或屏蔽 / 访问。
+  // 「屏蔽」= 门户不再把这条路由转过去（上游照跑不误），不是停掉那个程序。
   if (running) {
     const svcRows = [];
-    const degraded = services.filter((s) => s && s.enabled && s.alive === false).length;
+    const blocked = services.filter((s) => s && s.enabled !== true).length;
+    const down = services.filter(
+      (s) => s && s.enabled === true && s.alive === false).length;
 
     svcRows.push(h("div", { key: "svc-head", style: styles.rowBetween },
-      h("div", { style: styles.sectionTitle, marginBottom: 0 }, "开放中的服务"),
+      h("div", { style: styles.sectionTitle, marginBottom: 0 }, "对外发布的节点"),
       h("span", { style: styles.muted },
         services.length + " 个"
-        + (degraded ? " · " + degraded + " 个上游未响应" : "")),
+        + (blocked ? " · " + blocked + " 个已屏蔽" : "")
+        + (down ? " · " + down + " 个上游未响应" : "")),
     ));
+    svcRows.push(h("div", { key: "svc-tip", style: styles.muted },
+      "这里只管门户要不要把请求转过去；上游程序请用它自己的方式启动。"));
 
     if (!services.length) {
       svcRows.push(h("div", { key: "svc-none", style: styles.muted },
-        "还没有服务。用下面的「自动发现」扫描本机在跑的 Web 服务，"
-        + "或「手动添加」自己填路由。"));
+        "还没有节点。点下面的「添加节点」把本机的一个端口发布出去。"));
     }
 
-    // 每个服务一张卡：状态点 + 名称 + 路由 + 上游 + 动作
+    // 每个节点一张卡：名称 + 路由 + 上游 + 访问 / 开放屏蔽 / 编辑 / 删除
     for (const svc of services) {
       const key = svc.key || svc.name || "";
-      const enabled = svc.enabled === true;
+      const open = svc.enabled === true;
       const alive = svc.alive !== false;
-      // 状态语义（修控制台里那个真 bug）：**上游没响应**比"开着"更重要。
-      // 控制台原来先判 enabled，于是上游死了仍显示绿色「已启用」—— 用户点
-      // 「访问」得到 502 却看不出原因。这里 alive 优先。
-      const state = !enabled
-        ? { color: COLOR.idle, dot: COLOR.idle, text: "已关闭" }
-        : (alive ? { color: COLOR.success, dot: COLOR.success, text: "运行中" }
-                 : { color: COLOR.warn, dot: COLOR.warn, text: "上游未响应" });
       const editing = editKey === key;
 
       svcRows.push(h("div", { key: "svc-" + key, style: styles.svc },
@@ -1219,19 +1152,23 @@ function ServicePortalSettingsTab() {
             h("span", { style: styles.svcName }, String(svc.name || key)),
             h("span", { style: styles.svcMount }, String(svc.mount || "")),
           ),
-          h("span", { style: { color: state.color, fontSize: TYPE.caption,
-                               whiteSpace: "nowrap" } },
-            h("span", { style: Object.assign({}, styles.dot(enabled), {
-              background: state.dot }) }), state.text),
+          // 状态只说**路由**的开放与否；上游通不通另用一小行提示（不混淆两者）
+          h("span", { style: { color: open ? COLOR.success : COLOR.idle,
+                               fontSize: TYPE.caption, whiteSpace: "nowrap" } },
+            h("span", { style: Object.assign({}, styles.dot(open), {
+              background: open ? COLOR.success : COLOR.idle }) }),
+            open ? "开放中" : "已屏蔽"),
         ),
         h("div", { style: styles.muted },
-          "上游 " + String(svc.target || "")
+          "转发到 " + String(svc.target || "")
           + (svc.note ? " · " + String(svc.note) : "")),
-        // 上游没响应时**直接告诉他怎么办**，不让他点进去才发现打不开
-        !enabled || alive ? null
-          : h("div", { key: "svc-dead", style: styles.warnInline },
-              "点「访问」会失败 —— 请先把 " + String(svc.target || "")
-              + " 上的程序启动起来。"),
+        // 上游没响应只作为**提示**：它解释"为什么访问打不开"，
+        // 但绝不影响这条路由本身的开放/屏蔽（那是两件事）。
+        open && !alive
+          ? h("div", { key: "svc-down", style: styles.warnInline },
+              "上游没响应 —— 请先把 " + String(svc.target || "")
+              + " 上的程序启动起来（本插件不负责启动它）。")
+          : null,
 
         editing
           ? h("div", { key: "svc-edit", style: styles.stack },
@@ -1274,22 +1211,22 @@ function ServicePortalSettingsTab() {
               ),
             )
           : h("div", { key: "svc-act", style: styles.actionRow },
-              // 访问：只在开着且上游活着时给链接（否则点开就是 502，
-              // 那种"能点但打不开"比不给链接更让人困惑）
-              enabled && alive
+              // 「访问」：用户要求"每个设置的服务都要有一个点击直接打开的功能叫访问"。
+              // 屏蔽时不给链接（打不开），这是唯一不给的情况 —— 因为它确实不转发。
+              open
                 ? h("a", {
-                    href: (status.portalUrl || ("http://127.0.0.1:" + port))
-                      + String(svc.mount || "").replace(/^\//, ""),
+                    href: serviceUrl(svc),
                     target: "_blank", rel: "noreferrer",
                     style: Object.assign({}, styles.primary,
                       { textDecoration: "none" }),
                   }, "访问")
                 : null,
+              // 这就是用户说的「屏蔽 / 开放」：只改路由是否转发，不动上游进程
               h("button", { style: styles.btn, type: "button",
                 disabled: !!busy,
                 onClick: () => serviceAction(key,
-                  enabled ? "disable" : "enable", enabled ? "关闭" : "开启"),
-              }, enabled ? "关闭" : "开启"),
+                  open ? "block" : "open", open ? "屏蔽" : "开放"),
+              }, open ? "屏蔽" : "开放"),
               h("button", { style: styles.btn, type: "button",
                 disabled: !!busy,
                 onClick: () => {
@@ -1304,9 +1241,9 @@ function ServicePortalSettingsTab() {
               h("button", { style: styles.danger, type: "button",
                 disabled: !!busy,
                 onClick: () => {
-                  // 删除是不可撤销的：必须确认（控制台原来用原生 confirm 做了）
+                  // 删除是不可撤销的：必须确认
                   if (typeof window !== "undefined" && window.confirm
-                      && !window.confirm("删除服务「" + (svc.name || key)
+                      && !window.confirm("删除节点「" + (svc.name || key)
                         + "」？路由 " + (svc.mount || "") + " 会立即失效。")) {
                     return;
                   }
@@ -1317,84 +1254,18 @@ function ServicePortalSettingsTab() {
       ));
     }
 
-    // 工具行：刷新 / 自动发现 / 手动添加
+    // 工具行：只剩「添加节点」（用户要求去掉刷新与自动发现）
     svcRows.push(h("div", { key: "svc-tools", style: styles.actionRow },
-      h("button", { style: styles.btn, type: "button",
-        disabled: !!busy, onClick: reloadServices },
-        busy === "services" ? "刷新中…" : "刷新"),
-      h("button", { style: styles.btn, type: "button",
-        disabled: !!busy, onClick: runDiscover },
-        busy === "discover" ? "扫描中…" : "自动发现"),
-      h("button", { style: styles.btn, type: "button",
+      h("button", { style: addOpen ? styles.btn : styles.primary, type: "button",
         disabled: !!busy,
         onClick: () => { setAddOpen(!addOpen); setAddErr(""); },
-      }, addOpen ? "取消添加" : "手动添加"),
+      }, addOpen ? "取消" : "添加节点"),
     ));
 
-    // 自动发现结果
-    if (busy === "discover") {
-      svcRows.push(h("div", { key: "disc-busy", style: styles.muted },
-        "正在扫描本机在听的端口…"));
-    } else if (discovered) {
-      const okList = discovered.filter((c) => c.level === "ok");
-      const risky = discovered.filter((c) => c.level !== "ok");
-      svcRows.push(h("div", { key: "disc", style: styles.svc },
-        h("div", { style: styles.cardTitle }, "自动发现结果"),
-        h("div", { style: styles.muted },
-          discovered.length
-            ? "找到 " + discovered.length + " 个像 Web 服务的端口。"
-              + (okList.length ? "其中 " + okList.length + " 个可直接添加。" : "")
-              + (risky.length ? " 另有 " + risky.length
-                  + " 个被标为不建议（默认没勾选）。" : "")
-            : "没找到新的 Web 服务（都已添加，或本机没有在跑的 HTTP 服务）。"),
-        // 分开渲染：可推荐的在前，危险的在后且带原因 —— 让"为什么不要勾"一眼可见
-        ...[...okList, ...risky].map((c) =>
-          h("label", { key: "disc-" + c.port, style: styles.discRow },
-            h("input", {
-              type: "checkbox", style: styles.check,
-              checked: !!picked[c.port],
-              onChange: (e) => setPicked(Object.assign({}, picked,
-                { [c.port]: e.target.checked })),
-            }),
-            h("div", { style: { flex: 1, minWidth: 0 } },
-              h("div", { style: styles.row },
-                h("span", { style: styles.svcName }, String(c.name || "")),
-                h("span", { style: styles.svcMount }, String(c.target || "")),
-                c.level === "danger"
-                  ? h("span", { style: styles.dangerText }, "不建议")
-                  : (c.level === "caution"
-                      ? h("span", { style: styles.warnInline }, "谨慎")
-                      : null),
-              ),
-              h("div", { style: styles.muted },
-                String(c.evidence || "")
-                + (c.proc ? " · " + String(c.proc) : "")),
-              c.reason
-                ? h("div", { style: c.level === "danger"
-                    ? styles.dangerText : styles.warnInline }, String(c.reason))
-                : null,
-            ),
-          )),
-        discoverErr ? h("div", { style: styles.errInline }, discoverErr) : null,
-        h("div", { style: styles.actionRow },
-          h("button", { style: styles.primary, type: "button",
-            disabled: busy === "discover-add",
-            onClick: addPicked },
-            busy === "discover-add" ? "添加中…" : "添加勾选的"),
-          h("button", { style: styles.btn, type: "button",
-            onClick: () => { setDiscovered(null); setPicked({});
-                             setDiscoverErr(""); } }, "关闭"),
-        ),
-      ));
-    } else if (discoverErr) {
-      svcRows.push(h("div", { key: "disc-err", style: styles.errInline },
-        discoverErr));
-    }
-
-    // 手动添加表单
+    // 添加节点表单（手动填写，不扫描）
     if (addOpen) {
       svcRows.push(h("div", { key: "add", style: styles.svc },
-        h("div", { style: styles.cardTitle }, "手动添加服务"),
+        h("div", { style: styles.cardTitle }, "添加节点"),
         h("div", { style: styles.stack },
           h("div", { style: styles.row },
             h("input", { style: styles.input, value: addForm.name,
@@ -1402,13 +1273,13 @@ function ServicePortalSettingsTab() {
               onChange: (e) => setAddForm(Object.assign({}, addForm,
                 { name: e.target.value })) }),
             h("input", { style: styles.input, value: addForm.mount,
-              placeholder: "/rltrain（路由路径）",
+              placeholder: "/rltrain（对外路径）",
               onChange: (e) => setAddForm(Object.assign({}, addForm,
                 { mount: e.target.value })) }),
           ),
           h("div", { style: styles.row },
             h("input", { style: styles.input, value: addForm.target,
-              placeholder: "127.0.0.1:8810（上游地址）",
+              placeholder: "127.0.0.1:8810（本机端口）",
               onKeyDown: (e) => { if (e.key === "Enter") submitAdd(); },
               onChange: (e) => setAddForm(Object.assign({}, addForm,
                 { target: e.target.value })) }),
@@ -1422,8 +1293,10 @@ function ServicePortalSettingsTab() {
         h("div", { style: styles.actionRow },
           h("button", { style: styles.primary, type: "button",
             disabled: busy === "svc-add", onClick: submitAdd },
-            busy === "svc-add" ? "添加中…" : "添加服务"),
+            busy === "svc-add" ? "添加中…" : "添加节点"),
         ),
+        h("div", { style: styles.muted },
+          "添加后默认就是「开放」；上游程序要你自己启动（这里只负责路由）。"),
       ));
     }
 

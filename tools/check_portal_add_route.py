@@ -182,13 +182,37 @@ def main():
             check("删除后清单里没有了", "/routeprobe" not in mounts,
                   "清单=%r" % mounts)
 
-            # ---- 自动发现也走宿主路由 ----
-            code, out = http("GET",
-                             "http://127.0.0.1:%d/service-portal/api/discover"
-                             % host_port, timeout=120)
-            check("宿主路由：/discover 能出候选",
-                  code == 200 and isinstance(out.get("candidates"), list),
-                  "HTTP %s 候选=%s" % (code, len(out.get("candidates") or [])))
+            # ---- 新增：开放 / 屏蔽（用户要求的路由闸门语义）----
+            # 加回来后先屏蔽、再开放，验证它**只改路由开关**（不碰上游进程）。
+            code, out = http("POST",
+                             "http://127.0.0.1:%d/service-portal/api/services/add"
+                             % host_port,
+                             {"name": "闸门测试", "mount": "/gateprobe",
+                              "target": "127.0.0.1:19091"})
+            check("重新添加一个节点", code == 200 and out.get("ok") is True,
+                  "HTTP %s" % code)
+            code, out = http(
+                "POST",
+                "http://127.0.0.1:%d/service-portal/api/services/gateprobe/block"
+                % host_port)
+            check("block 生效：注册表里变成关闭（门户不再转发）",
+                  code == 200 and (out.get("service") or {}).get("enabled") is False,
+                  "HTTP %s %r" % (code, out.get("service")))
+            code, out = http(
+                "POST",
+                "http://127.0.0.1:%d/service-portal/api/services/gateprobe/open"
+                % host_port)
+            check("open 生效：回到开放",
+                  code == 200 and (out.get("service") or {}).get("enabled") is True,
+                  "HTTP %s" % code)
+            # restart 是"启停服务"语义，已被明确取消 —— 必须报错，不能悄悄成功
+            code, out = http(
+                "POST",
+                "http://127.0.0.1:%d/service-portal/api/services/gateprobe/restart"
+                % host_port)
+            check("反例：restart 已被取消（不许悄悄成功）",
+                  code == 400 and out.get("ok") is not True,
+                  "HTTP %s %r" % (code, out.get("error")))
 
             # ---- 反例：校验失败必须如实报错 ----
             code, out = http("POST",

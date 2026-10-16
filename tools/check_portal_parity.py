@@ -381,38 +381,78 @@ def main():
     check("底部警示只在「免密」时出现（跨区块的全局安全提示）",
           "if (running && lanAuth === false) {" in client)
 
-    # ================= ⑥ 控制台功能搬进设置页 =================
+    # ================= ⑥ 节点管理在设置页（门户页只读）=================
     #
-    # 用户要求：「在插件设置里，能把控制台的功能做了吗？这样就不需要独立控制台了，
-    # 提供刷新当前系统服务、自动发现、手动添加某个服务这种功能」。
-    # 这里钉住四件事：能力都在、数据来自宿主、发现结果有安全分级、危险项默认不勾。
-    print("\n[⑥ 服务管理搬进设置页（替代独立控制台）]")
-    check("设置页有服务清单渲染（不再只是「打开控制台」入口）",
-          "styles.svc" in client and '"开放中的服务"' in client)
-    check("数据来自宿主 /status 的 services（不是面板自己再拉一份）",
-          "status.services" in client and "servicesDegraded" in host)
-    check("有「刷新」按钮", 'reloadServices' in client and '"刷新中…"' in client)
-    check("有「自动发现」按钮", 'runDiscover' in client and '"扫描中…"' in client)
-    check("有「手动添加」按钮与表单", 'submitAdd' in client
-          and '"手动添加"' in client and '"添加服务"' in client)
-    check("每个服务能启停/编辑/删除",
-          '"enable"' in client and '"disable"' in client
-          and '"update"' in client and '"delete"' in client)
-    check("删除有二次确认（不可撤销的动作）", "window.confirm" in client)
-    check("**危险候选默认不勾选**（实测有 DSH 自身/代理/远程控制）",
-          "c.level === \"ok\"" in client and "pre[c.port] = true" in client)
-    check("发现结果里危险项带原因、并被标「不建议」",
-          '"不建议"' in client and "c.reason" in client)
-    check("访问链接只在开着且上游活着时给（避免点了 502）",
-          "enabled && alive" in client)
-    check("上游未响应时直接告诉用户怎么办（不是只标个色）",
-          "点「访问」会失败" in client)
+    # 用户的要求（原话）：
+    #   · 「我们添加的节点是做在插件设置里的，每个节点都有屏蔽和开放的开关，
+    #      不是服务开启的开关」；
+    #   · 「启动服务是服务本身的事情，这里只是负责可以路由」；
+    #   · 「每个设置的服务都要有一个点击直接打开的功能叫做访问」；
+    #   · 「局域网和公网地址的路径旁边的复制功能边上也加上访问」；
+    #   · 「取消自动发现服务的功能，不用刷新也不用搜索，就是人手动添加端口」；
+    #   · 「门户页面只读 —— 相当于一个测试页和引导页，没有设置功能」。
+    print("\n[⑥ 节点管理在设置页 · 门户页只读]")
+    check("设置页有节点清单渲染",
+          "styles.svc" in client and '"对外发布的节点"' in client)
+    check("数据来自宿主 /status 的 services",
+          "status.services" in client and "services" in host)
+    check("**开关是「开放 / 屏蔽」**（不是服务启停）",
+          '"屏蔽"' in client and '"开放"' in client
+          and 'open ? "block" : "open"' in client)
+    check("**不再启停上游进程**：门户侧 enable/disable 只改注册表",
+          # 断言"没有可执行代码"，而不是"这个词不出现"：注释里写
+          # 「原 ServiceSupervisor 已整块删掉」「早先这里会 supervisor.start()」
+          # 都是正当的说明，不该被当成残留代码。
+          "只改注册表的 enabled" in run
+          and "import portal_registry" not in run.split("def main", 1)[-1]
+          and "creationflags=_detached_flags()" in run)
+    check("上游进程管理器整块删掉（没有可实例化的类）",
+          "class ServiceSupervisor" not in run)
+    check("删掉了自动拉起进程的整个类（不再管别人程序）",
+          "class ServiceSupervisor" not in run)
+    check("启动时不再自动拉起服务", 'entry.get("autoStart")' not in run)
+    check("删除节点时不再顺手停上游进程",
+          "registry.remove(key)" in run and "supervisor.stop" not in run)
+    check("每个节点有「访问」", '"访问"' in client and "serviceUrl" in client)
+    check("地址行「复制」旁也有「访问」（局域网 + 公网共 2 处）",
+          client.count("style: styles.accessLink") == 2)
+    check("「访问」链接用品牌色描边（与「复制」区分开）",
+          "accessLink:" in client and "border: \"1px solid \" + COLOR.brand" in client)
+    check("**自动发现已删掉**（界面/接口都没了）",
+          "discover" not in client.lower() and "discover" not in host.lower()
+          and "/discover" not in run)
+    check("**「刷新」按钮已删掉**", "reloadServices" not in client)
+    check("只保留「添加节点」（手动填）",
+          '"添加节点"' in client and "submitAdd" in client)
     check("宿主有转发路由 /services/add", '"/services/add"' in host)
-    check("宿主转发服务动作（通配 enable/disable/delete/update/restart）",
-          "svcMatch" in host and '"restart"' in host)
-    check("宿主有转发路由 /discover", '"/discover"' in host)
-    check("宿主转发用的是只读 GET（自动发现不该改任何东西）",
-          "getPortalJson" in host)
+    check("宿主转发节点动作（含 open/block）",
+          "svcMatch" in host and '"open"' in host and '"block"' in host)
+    check("存放动作不再包含 restart（那是启停语义）", '"restart"' not in host)
+    check("删除有二次确认（不可撤销的动作）", "window.confirm" in client)
+    check("上游没响应时说明「本插件不负责启动它」",
+          "本插件不负责启动" in client)
+
+    # ---- 门户页：只读测试页 + 引导页 ----
+    console = read("tools/portal_console.py")
+    check("门户页**没有**添加表单（<form 不再渲染）",
+          "_service_form" not in console)
+    check("门户页没有「删除 / 编辑」按钮",
+          # 断言的是"没有生成这些按钮"，而不是"这两个词不出现" ——
+          # 说明性注释里写「没有『编辑』『删除』」是正当的，不该被当成按钮。
+          'class="btn">删除' not in console
+          and 'href="/_api/services/' not in console
+          and '_service_form' not in console)
+    check("门户页没有开关按钮（enable/disable 的 form）",
+          "services/%s/enable" not in console
+          and "services/%s/disable" not in console)
+    check("门户页保留「访问」（这就是测试页的用处）",
+          'class="btn primary" href=' in console and "访问" in console)
+    check("门户页说明自己是只读 + 去哪管理（引导）",
+          "只读" in console and "设置 → 对外服务门户" in console)
+    check("门户页讲清「屏蔽」不停止上游程序",
+          "不会</b>停止上游程序" in console or "不会停止上游程序" in console)
+    check("门户页能显示「已屏蔽」与「上游未响应」两种状态",
+          "已屏蔽" in console and "上游未响应" in console)
 
     passed = sum(1 for ok in results if ok)
     print("\n设置页三处对齐控制检验：%d/%d" % (passed, len(results)))

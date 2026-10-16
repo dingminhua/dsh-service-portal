@@ -108,28 +108,40 @@ def main():
                                   for s in (out.get("services") or [])),
               "HTTP %s" % code)
         code, out = http("POST",
-                         "http://127.0.0.1:%d/_api/services/probe/disable" % portal_port)
-        check("门户侧：disable 生效",
+                         "http://127.0.0.1:%d/_api/services/probe/block" % portal_port)
+        check("门户侧：block（路由闸门）生效",
               code == 200 and (out.get("service") or {}).get("enabled") is False,
               "HTTP %s %r" % (code, out))
+        code, out = http("POST",
+                         "http://127.0.0.1:%d/_api/services/probe/open" % portal_port)
+        check("门户侧：open 生效（回到开放）",
+              code == 200 and (out.get("service") or {}).get("enabled") is True,
+              "HTTP %s" % code)
+        # disable/enable 作为老别名仍要能用（控制台老版本/脚本还在用）
+        code, out = http("POST",
+                         "http://127.0.0.1:%d/_api/services/probe/disable" % portal_port)
+        check("门户侧：disable 作为别名仍生效",
+              code == 200 and (out.get("service") or {}).get("enabled") is False,
+              "HTTP %s %r" % (code, out))
+        # restart 是"启停服务"语义 —— 已按用户要求取消，必须明确报错
+        code, out = http("POST",
+                         "http://127.0.0.1:%d/_api/services/probe/restart" % portal_port)
+        check("反例：restart 已取消（不再启停上游进程）",
+              code == 404 and out.get("ok") is not True,
+              "HTTP %s %r" % (code, out.get("error")))
         code, out = http("POST",
                          "http://127.0.0.1:%d/_api/services/probe/delete" % portal_port)
         check("门户侧：delete 生效", code == 200 and out.get("ok") is True,
               "HTTP %s" % code)
-        code, out = http("GET", "http://127.0.0.1:%d/_api/discover" % portal_port)
-        check("门户侧：GET /_api/discover 能出候选",
-              code == 200 and isinstance(out.get("candidates"), list),
-              "HTTP %s, 候选=%s" % (code, len(out.get("candidates") or [])))
 
         # ---- 宿主转发：这一层才是面板真正走的 ----
         #
         # 上一轮的教训：宿主把新字段静默忽略，面板"点了没用却弹成功"。
-        # 所以这里必须验证宿主的转发真的到了门户（用门户的 state 交叉确认）。
         check("宿主侧：转发路由已实现（源码级断言）",
               '"/services/add"' in open(os.path.join(ROOT, "lib", "index.js"),
                                         encoding="utf-8").read()
-              and '"/discover"' in open(os.path.join(ROOT, "lib", "index.js"),
-                                        encoding="utf-8").read())
+              and '"open"' in open(os.path.join(ROOT, "lib", "index.js"),
+                                   encoding="utf-8").read())
 
         # 失败路径：门户没在跑时必须**如实失败**，不能假成功
         dead_port = free_port()

@@ -268,8 +268,20 @@ def main():
 
     print("[空列表]")
     empty = pc.console_html(base_state).decode("utf-8")
-    check("空列表有引导文案", "还没有服务" in empty)
+    # 门户页现在是只读的测试/引导页：空列表时要**引导去插件设置里加节点**，
+    # 而不是（像以前那样）让用户在当前页面找添加表单 —— 表单已经删了。
+    check("空列表有引导文案", "还没有节点" in empty)
+    check("空列表引导去插件设置里添加", "设置 → 对外服务门户" in empty)
     check("空列表不是空白", len(empty) > 500)
+
+    print("[只读：门户页不得有管理入口]")
+    # 用户要求「门户页面只读，相当于一个测试页和引导页，没有设置功能」。
+    # 这条是**结构性**断言：不能生成任何写操作的表单/按钮。
+    check("没有添加服务表单", "<form" not in empty and "添加服务" not in empty)
+    check("没有 enable/disable/delete 的写操作入口",
+          "/_api/services/" not in empty)
+    check("说明了「屏蔽」不会停止上游程序",
+          "停止上游程序" in empty)
 
     print("")
     if failures:

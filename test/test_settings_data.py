@@ -97,8 +97,12 @@ def main():
         status, body = portal_call("/")
         check("控制台页面可打开（扫码后的落地页）",
               status == 200 and "对外服务门户".encode() in body)
-        check("控制台含添加服务表单（在那里管理服务）",
-              b'name="mount"' in body and b'name="target"' in body)
+        # 用户要求门户页只读（测试页 + 引导页，没有设置功能）：不能有添加表单
+        check("门户页只读：没有添加/管理表单",
+              b'name="mount"' not in body and b'name="target"' not in body
+              and b"<form" not in body)
+        check("门户页引导去插件设置里管理",
+              "设置 → 对外服务门户".encode() in body)
 
         # 5. 切内网口令后状态与行为一致
         portal_call("/_api/settings", "POST",

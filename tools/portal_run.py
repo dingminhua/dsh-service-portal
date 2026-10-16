@@ -293,73 +293,20 @@ def write_lan_password(pin):
 
 
 # --------------------------------------------------------------- 服务进程管理
-
-class ServiceSupervisor:
-    """按注册表拉起 / 停止服务进程（只管子进程，不碰别人起的服务）。"""
-
-    def __init__(self, host_repo, python_exe):
-        self.host_repo = host_repo
-        self.python = python_exe
-        self.procs = {}          # key -> Popen
-
-    def alive(self, key):
-        proc = self.procs.get(key)
-        return proc is not None and proc.poll() is None
-
-    def start(self, entry):
-        """拉起服务（已在跑 -> 直接返回 True）。"""
-        import portal_registry
-        key = entry.get("key")
-        target = entry.get("target") or ""
-        host, _, port_text = target.rpartition(":")
-        try:
-            port = int(port_text)
-        except ValueError:
-            return False, "target 端口无效：%r" % target
-        if port_listening(port):
-            return True, "端口已在监听（视为已运行）"
-        script = (entry.get("script") or "").strip()
-        if not script:
-            return False, "没有配 script，无法拉起（需外部自行启动并监听 %s）" % target
-        cwd = entry.get("cwd") or self.host_repo
-        if not os.path.isabs(cwd):
-            cwd = os.path.join(self.host_repo, cwd)
-        path = script if os.path.isabs(script) else os.path.join(self.host_repo, script)
-        if not os.path.isfile(path):
-            return False, "找不到脚本：%s" % path
-        log = open(_log_path("service_%s.log" % key), "ab")
-        env = dict(os.environ, PYTHONIOENCODING="utf-8")
-        proc = subprocess.Popen(
-            [self.python, "-X", "utf8", path],
-            cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
-            env=env, creationflags=_detached_flags())
-        self.procs[key] = proc
-        # 等端口就绪（最多 60 秒）
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            if port_listening(port):
-                return True, "已启动（PID %d）" % proc.pid
-            if proc.poll() is not None:
-                return False, "进程退出（码 %s），见 %s" % (
-                    proc.returncode, _log_path("service_%s.log" % key))
-            time.sleep(0.5)
-        return False, "启动超时（60 秒内端口未就绪）"
-
-    def stop(self, key):
-        proc = self.procs.get(key)
-        if proc is None or proc.poll() is not None:
-            self.procs.pop(key, None)
-            return False
-        try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        except Exception:
-            pass
-        self.procs.pop(key, None)
-        return True
+#
+# **本插件不再管理任何上游进程。**
+#
+# 用户明确要求：开关只负责「门户要不要把请求转过去」（路由闸门），
+# 不负责启停上游程序。原话：「如果是负责启动和停止，还需要配置对应的启停程序，
+# 暂不处理」—— 那个判断是对的：要可靠地拉起别人的程序，得先知道它的启动方式
+# （命令、工作目录、环境变量、就绪判定），这是一整套配置，而且很容易做出
+# "以为在管、其实没管住"的假象。
+#
+# 所以原 ServiceSupervisor（按 script 拉起/停止子进程）整块删掉了：
+#   · 注册表的 enabled 只表示"这条路由开放/屏蔽"；
+#   · 上游程序由用户自己的脚本/IDE 启动，插件只探测它通不通（port_listening）。
+# 注册表里的 script / cwd / autoStart 字段保留着（老数据仍能读，不破坏兼容），
+# 但本插件不再拿它们去 spawn 任何东西。
 
 
 def _detached_flags():
@@ -410,13 +357,8 @@ def run_portal(args):
     if registry.load_error:
         print("提示：注册表读取有问题，已按空表处理：%s" % registry.load_error,
               file=sys.stderr)
-    for entry in registry.list():
-        if entry.get("autoStart"):
-            registry.set_enabled(entry["key"], True)
 
     host_repo = args.host_repo or DEFAULT_HOST_REPO
-    python_exe = args.python if os.path.isfile(args.python) else sys.executable
-    supervisor = ServiceSupervisor(host_repo, python_exe)
 
     public_url_holder = {"url": None}
     tunnel_proc = {"proc": None}
@@ -620,34 +562,6 @@ def run_portal(args):
         if method == "GET" and route == "/services":
             handler._send_json(200, {"ok": True, "services": console_state()["services"]})
             return True
-        if method == "GET" and route == "/discover":
-            # 自动发现：扫本机在听的端口，返回**带风险档**的候选（不写入任何东西）。
-            #
-            # 为什么放在门户这一侧、而不是宿主（Node）里去扫：这个能力属于
-            # 「门户管理自己代理的服务」，与注册表同源；放这里注册表数据就是
-            # 现成的（要排除已注册的端口），不必让宿主再取一遍。
-            #
-            # 安全：danger 档的候选（DSH 自身、代理、远程控制、系统服务）
-            # 只是"列出来 + 说明原因"，界面上默认不勾选，绝不一键添加。
-            registered = [e.get("target") or "" for e in registry.list()]
-            # 排除本项目自己的进程：门户端口 + cloudflared 隧道端口
-            # （20241 是实测的本机隧道端口；隧道端口会变，所以也按进程名兜底）
-            exclude = [args.port]
-            import portal_discover
-            try:
-                result = portal_discover.discover_services(
-                    portal_port=args.port,
-                    registered=registered,
-                    exclude_ports=exclude,
-                )
-            except Exception as exc:               # 发现失败不能拖垮门户
-                handler._send_json(500, {
-                    "ok": False,
-                    "error": "扫描失败：%r" % exc,
-                })
-                return True
-            handler._send_json(200, result)
-            return True
         if method == "GET" and route == "/state":
             handler._send_json(200, dict(console_state(), ok=True))
             return True
@@ -844,9 +758,7 @@ def run_portal(args):
             except portal_registry.RegistryError as exc:
                 handler._send_json(400, {"ok": False, "error": str(exc)})
                 return True
-            if entry.get("enabled") and entry.get("autoStart"):
-                ok, note = supervisor.start(entry)
-                entry["startNote"] = note
+            # 不在这里拉起上游进程：本插件只管路由（见下面"路由闸门"的说明）。
             handler._send_json(200, {"ok": True, "service": entry})
             return True
 
@@ -859,31 +771,23 @@ def run_portal(args):
                 handler._send_json(404, {"ok": False,
                                          "error": "没有服务 %s" % key})
                 return True
-            if method == "POST" and action in ("enable", "disable"):
-                want = action == "enable"
-                if want and not supervisor.alive(key):
-                    ok, note = supervisor.start(entry)
-                    if not ok:
-                        # 端口没起来也必须把开关置位，由控制台显示红/黄状态，
-                        # 但要把原因明确回报（不静默成功）。
-                        registry.set_enabled(key, True)
-                        handler._send_json(200, {
-                            "ok": True, "service": registry.get(key),
-                            "warning": note})
-                        return True
-                if not want:
-                    supervisor.stop(key)
+            if method == "POST" and action in ("enable", "disable", "open", "block"):
+                # ---- 这是「路由闸门」，不是"启停服务" ----
+                #
+                # 用户明确要求：开关只管"门户要不要把请求转过去"，**不负责启停上游程序**。
+                # 原话：「如果是负责启动和停止，还需要配置对应的启停程序，暂不处理」。
+                #
+                # 所以这里**只改注册表的 enabled**，绝不 spawn/kill 任何进程 ——
+                # 上游起不起来是上游自己的事（它归用户自己的启动脚本/IDE 管）。
+                # 这个区分很重要：早先这里会 supervisor.start()，于是"开放"一个
+                # 没配 script 的服务会报"没有配 script，无法拉起"，用户以为功能坏了。
+                want = action in ("enable", "open")
                 handler._send_json(200, {"ok": True,
                                          "service": registry.set_enabled(key, want)})
                 return True
-            if method == "POST" and action == "restart":
-                supervisor.stop(key)
-                ok, note = supervisor.start(entry)
-                handler._send_json(200, {"ok": ok, "note": note,
-                                         "service": registry.get(key)})
-                return True
             if method == "POST" and action == "delete":
-                supervisor.stop(key)
+                # 删除只从注册表移除（不再顺手 stop 进程 —— 见上面"路由闸门"的说明：
+                # 上游进程不归本插件管，它可能正被别的用途使用）。
                 registry.remove(key)
                 handler._send_json(200, {"ok": True})
                 return True
@@ -895,6 +799,16 @@ def run_portal(args):
                     handler._send_json(400, {"ok": False, "error": str(exc)})
                     return True
                 handler._send_json(200, {"ok": True, "service": updated})
+                return True
+            # 认得出是"节点动作"、但动作不被支持：要说清**为什么**，
+            # 不能只回一句"未知接口" —— 用户（或老客户端）看到 restart 被拒，
+            # 需要知道"这是有意的：本插件不再启停上游程序"。
+            if method == "POST" and action:
+                handler._send_json(404, {
+                    "ok": False,
+                    "error": "不认识的动作 %s（本插件只管路由开关："
+                             "open/block；不再启停上游程序）" % action,
+                })
                 return True
         handler._send_json(404, {"ok": False, "error": "未知接口 %s" % route})
         return True
@@ -1038,8 +952,8 @@ def run_portal(args):
             return
         stopped["flag"] = True
         print("\n正在停止…")
-        for entry in registry.list():
-            supervisor.stop(entry["key"])
+        # 不再停任何"服务进程"：本插件不管理上游程序（见上面"服务进程管理"说明）。
+        # 上游该由它自己的启动方式去停 —— 我们只负责把门户关掉。
         proc = tunnel_proc["proc"]
         if proc is not None and proc.poll() is None:
             try:
