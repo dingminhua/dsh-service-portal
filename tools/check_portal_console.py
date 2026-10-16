@@ -283,6 +283,37 @@ def main():
     check("说明了「屏蔽」不会停止上游程序",
           "停止上游程序" in empty)
 
+    print("[测试页：能就地测通不通（0.8.5 新增）]")
+    # 用户说"访问页没变成只读的测试页"——页面确实已只读，但**只链接、不能测**，
+    # 所以它当时读起来是"入口页"而不是"测试页"。这里钉住测试能力本身。
+    check("有「测试」按钮", 'class="btn probe"' in text)
+    check("测试按钮指向该节点的对外路径",
+          'data-probe="/alpha/"' in text, )
+    check("测试结果就地显示（有 result 容器）", 'class="result"' in text)
+    check("被屏蔽的节点不给测试（disabled）",
+          bool(re.search(r'<button[^>]*disabled[^>]*>\s*测试', text)))
+    check("探活是相对路径（内网/公网都无需知道域名）",
+          'data-probe="/' in text)
+    # 别再用 redirect:"manual"：Fetch 规范下它是 opaque-redirect，状态码恒为 0，
+    # 会把"上游把 / 跳转到 /login"这种常见情况报成"状态 0"。
+    check("探活不请求 opaque-redirect（无 redirect:manual）",
+          'redirect:"manual"' not in text)
+
+    print("[页脚：鼓励一下]")
+    check("页脚有「鼓励一下」链接", "鼓励一下 ★" in text)
+    check("鼓励链接指向本仓库", pc.REPO_URL in text)
+    check("鼓励链接新窗口打开且带 noopener（防 tabnabbing）",
+          'rel="noreferrer noopener"' in text)
+
+    print("[美化：语义令牌 + 深浅色 + 触控目标]")
+    check("用 CSS 变量做语义令牌", "--brand:" in text and "var(--brand)" in text)
+    check("深色模式有独立一套令牌（prefers-color-scheme:dark）",
+          "prefers-color-scheme:dark" in text)
+    check("触控目标 >= 44px（--tap:44px）", "--tap:44px" in text)
+    check("键盘焦点可见（:focus-visible）", ":focus-visible" in text)
+    check("尊重减少动效（prefers-reduced-motion）",
+          "prefers-reduced-motion:reduce" in text)
+
     print("")
     if failures:
         print("门户控制台控制检验失败：%d 项" % len(failures))

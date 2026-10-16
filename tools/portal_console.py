@@ -16,6 +16,10 @@ QR 实现对齐 ISO/IEC 18004 / thonky.com/qr-code-tutorial 的规则：
 """
 import base64
 
+# 项目仓库地址：页脚的「鼓励一下 ★」用，与插件设置页那个链接指向同一处
+# （设置页里是 client/index.jsx 的 REPO_URL）。两处必须一致，改一处记得改另一处。
+REPO_URL = "https://github.com/dingminhua/dsh-service-portal"
+
 # ---------------------------------------------------------------------------
 # HTML 转义
 # ---------------------------------------------------------------------------
@@ -506,57 +510,87 @@ def qr_data_uri(text, *, scale=4):
 # 控制台页面
 # ---------------------------------------------------------------------------
 _CSS = """
-:root{color-scheme:dark light}
+/* 语义令牌：一处改，整页跟着变；深浅色各一套。禁止在组件里写裸 hex。 */
+:root{
+ color-scheme:light dark;
+ --bg:#f4f5f7; --panel:#fff; --panel-2:#f8f9fb; --ink:#16181d; --ink-2:#5b6472;
+ --line:#e4e7ed; --line-2:#ccd3dc; --brand:#3355f0; --brand-ink:#fff;
+ --brand-soft:#eceffe; --ok:#128049; --warn:#a25e00; --bad:#cf2f24;
+ --r:14px; --r-sm:10px; --tap:44px;
+ --shadow:0 1px 2px rgba(16,20,28,.05),0 10px 26px -16px rgba(16,20,28,.28);
+}
+@media (prefers-color-scheme:dark){
+ :root{--bg:#0e1014; --panel:#161920; --panel-2:#1b1f27; --ink:#e9ecf1;
+  --ink-2:#98a1af; --line:#252a33; --line-2:#333a45; --brand:#7189ff;
+  --brand-ink:#0a0d13; --brand-soft:#1a2240; --ok:#3fbf72; --warn:#e0a02f;
+  --bad:#ff6f61; --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 30px -16px rgba(0,0,0,.75);}
+}
 *{box-sizing:border-box}
-body{margin:0;background:#14161a;color:#e8eaed;
- font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5}
-.wrap{max-width:640px;margin:0 auto;padding:24px 18px 48px}
-h1{font-size:22px;margin:0 0 4px}
-p.sub{font-size:13px;color:#98a0ad;margin:0 0 22px}
-section{background:#1c1f26;border:1px solid #2a2f38;border-radius:14px;
- padding:18px;margin-bottom:20px}
-section>h2{font-size:15px;margin:0 0 12px;color:#c8cdd7}
-.addr{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 0}
-.addr .url{font-family:ui-monospace,Menlo,monospace;font-size:13px;
- word-break:break-all;background:#12141a;border:1px solid #363c47;
- border-radius:8px;padding:8px 10px;flex:1;min-width:200px}
-.addr .copy{background:#2a2f38;color:#e8eaed;border:1px solid #363c47;
- border-radius:8px;padding:9px 14px;font-size:13px;cursor:pointer}
-.warn{display:block;font-size:12.5px;color:#f0b429;margin-top:6px}
-img.qr{width:168px;height:168px;image-rendering:pixelated;background:#fff;
- border-radius:8px;border:1px solid #363c47}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.6;
+ font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+ padding-bottom:env(safe-area-inset-bottom)}
+.wrap{max-width:720px;margin:0 auto;padding:28px 18px 56px}
+.top{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}
+h1{font-size:22px;margin:0;letter-spacing:-.01em}
+.badge{font-size:12px;font-weight:600;padding:5px 10px;border-radius:999px;
+ background:var(--brand-soft);color:var(--brand)}
+p.sub{font-size:13px;color:var(--ink-2);margin:6px 0 24px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+ padding:18px;margin-bottom:18px;box-shadow:var(--shadow)}
+section>h2{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+ color:var(--ink-2);margin:0 0 14px}
+.addr{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0}
+.addr .url{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ font-size:13px;word-break:break-all;background:var(--panel-2);
+ border:1px solid var(--line-2);border-radius:var(--r-sm);padding:11px 12px;
+ flex:1;min-width:170px}
+button,.btn{font:inherit;font-size:14px;min-height:var(--tap);border-radius:var(--r-sm);
+ border:1px solid var(--line-2);background:var(--panel-2);color:var(--ink);
+ padding:10px 16px;cursor:pointer;text-decoration:none;display:inline-flex;
+ align-items:center;justify-content:center;gap:6px;
+ transition:background .15s ease,border-color .15s ease,transform .12s ease}
+button:hover,.btn:hover{border-color:var(--ink-2);background:var(--panel)}
+button:active,.btn:active{transform:translateY(1px)}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+button[disabled],.btn.dim{opacity:.5;cursor:not-allowed;transform:none}
+.btn.primary{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
+.btn.primary:hover{background:var(--brand);filter:brightness(1.08)}
+.copy{font-size:13px;padding:10px 14px}
+.qr{display:block;width:172px;height:172px;image-rendering:pixelated;background:#fff;
+ border:1px solid var(--line-2);border-radius:var(--r-sm);margin-top:12px}
 .grid{display:grid;grid-template-columns:1fr;gap:14px}
-.card{background:#222630;border:1px solid #333a46;border-radius:12px;
- padding:14px}
-.card .top{display:flex;align-items:center;gap:10px;justify-content:space-between}
-.card h3{margin:0 0 4px;font-size:15px}
-.meta{font-size:12px;color:#8b93a1;margin:6px 0}
-.mono{font-family:ui-monospace,Menlo,monospace}
-.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
-.dot.on{background:#3fb950}.dot.off{background:#6b7280}.dot.dead{background:#f85147}
-.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.btn{min-height:44px;min-width:44px;padding:10px 14px;font-size:13px;
- border-radius:9px;border:1px solid #363c47;background:#2a2f38;color:#e8eaed;
- cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:5px}
-.btn.primary{background:#4f6ef7;border-color:#4f6ef7;color:#fff}
-.btn.primary:hover{background:#5c79f8}
-.btn:hover{background:#333a46}
-.btn:disabled,.btn.dim{background:#24282f;color:#5c6370;cursor:not-allowed}
-input,textarea,select{width:100%;box-sizing:border-box;padding:11px 12px;
- border-radius:9px;border:1px solid #363c47;background:#12141a;color:#e8eaed;
- font-size:14px;margin-bottom:10px}
-input:focus,textarea:focus,select:focus{outline:none;border-color:#4f6ef7;
- box-shadow:0 0 0 3px rgba(79,110,247,.18)}
-label{display:block;font-size:12px;color:#b6bdc9;margin-bottom:4px}
-.note{font-size:12px;color:#8b93a1}
-footer{font-size:12px;color:#6b7280;text-align:center;padding:18px 0}
-thead{text-align:left}
-@media (prefers-color-scheme:light){body{background:#f5f6f8;color:#1c1f26}
- section{background:#fff;border-color:#e2e6ec} .card{background:#fff;
- border-color:#e2e6ec}.meta{color:#5a6473} input,textarea,select{background:#fff;
- color:#1c1f26;border-color:#cbd2da} .dot.off{background:#9aa3af}
- .btn{background:#eef1f5;color:#1c1f26;border-color:#d0d6dd}
- .btn.primary{background:#4f6ef7;color:#fff}.addr .url{background:#f5f6f8}}
+.card{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-sm);
+ padding:15px}
+.card h3{margin:0;font-size:15px}
+.card .top{justify-content:flex-start}
+.pill{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--panel);
+ border:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap}
+.pill.on{color:var(--ok);border-color:currentColor}
+.pill.dead{color:var(--warn);border-color:currentColor}
+.pill.off{color:var(--ink-2)}
+.meta{font-size:12.5px;color:var(--ink-2);margin:8px 0}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.warn{display:block;font-size:12.5px;color:var(--warn);margin-top:8px;line-height:1.55}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.result{margin-top:10px;font-size:12.5px;border-radius:var(--r-sm);padding:10px 12px;
+ border:1px solid var(--line-2);background:var(--panel);line-height:1.55}
+.result.ok{color:var(--ok);border-color:currentColor}
+.result.bad{color:var(--bad);border-color:currentColor}
+.result.pending{color:var(--ink-2)}
+.note{font-size:12.5px;color:var(--ink-2)}
+footer{color:var(--ink-2);font-size:12px;text-align:center;padding:6px 0 0;line-height:1.7}
+footer a{color:inherit}
+.credit{display:inline-block;margin-top:6px;color:var(--ink-2);font-size:12.5px}
+.credit:hover{color:var(--ink)}
+@media (max-width:420px){
+ .wrap{padding:20px 14px 44px}
+ .qr{width:140px;height:140px}
+ section{padding:14px}
+}
+@media (prefers-reduced-motion:reduce){
+ *{transition:none!important;animation:none!important}
+}
 """
 
 
@@ -567,7 +601,12 @@ def _service_card(svc, public_url):
     所以这里**不再**渲染任何管理表单/按钮：
       · 没有「开启/关闭」（那是路由闸门，只在插件设置里改）；
       · 没有「编辑」「删除」；
-      · 保留「访问」——那正是"测试这个节点通不通"的动作。
+      · 保留「访问」（打开这个节点）与「测试」——后者才是"测试页"该有的东西。
+
+    「测试」为什么不等于「访问」：访问是**跳走**，用户得自己看浏览器报什么错；
+    上游没起来时门户回的是 502 纯文本页（我在真机上验过，`/realapp/` 返回
+    502 空体），用户看到一片空白，根本不知道"是门户坏了还是我的程序没起"。
+    测试是**就地**发一次请求并把结论写在卡片里，不用离开本页。
     """
     name = escape_html(svc.get("name") or svc.get("key") or "")
     mount = escape_html(svc.get("mount") or "")
@@ -576,31 +615,51 @@ def _service_card(svc, public_url):
     open_ = bool(svc.get("enabled"))
     alive = bool(svc.get("alive"))
     mount_val = svc.get("mount") or ""
+    # 测试用的路径：与「访问」目标一致。
+    #
+    # **必须用 path_quote（safe="/"），不能用 urllib_quote（safe=""）** ——
+    # 后者会把分隔用的 `/` 也编码成 %2F，于是 data-probe 变成 "%2Falpha%2F"，
+    # JS 拿它 fetch 出去请求的是"名字里带斜杠的一个段"，门户按 mount 匹配不上，
+    # 直接 404。**点「测试」永远失败**，而页面看起来完全正常（我第一版就是这样，
+    # 被 check_portal_probe 的 data-probe 断言抓到）。
+    # 非 ASCII 的前缀（用户可以把路由起成 /中文）仍要百分号编码，所以不能只 escape。
+    probe_path = path_quote(mount_val.rstrip("/") + "/")
+    probe_href = escape_html(probe_path)
 
-    # 状态语义要说清**两件事**：这条路是否开放（门户转不转发）、上游是否响应。
+    # 状态徽标要说清**两件事**：这条路是否开放（门户转不转发）、上游是否响应。
     # 早先只判 enabled，于是上游死了仍显示绿色「已启用」—— 用户点了访问得到
     # 502，却看不出原因。
     if not open_:
-        dot, status = "off", "已屏蔽（门户不转发）"
+        pill, status = "off", "已屏蔽"
     elif alive:
-        dot, status = "on", "开放中"
+        pill, status = "on", "开放中"
     else:
-        dot, status = "dead", "开放中 · 上游未响应"
+        pill, status = "dead", "上游未响应"
 
     if open_:
         # mount_val 已经带前导斜杠，这里只补尾部一个，避免 /train// 双斜杠
         visit = ('<a class="btn primary" href="%s">访问</a>'
                  % escape_html(mount_val.rstrip("/") + "/"))
+        probe = ('<button type="button" class="btn probe" data-probe="%s" '
+                 'data-name="%s">测试</button>' % (probe_href, name))
     else:
         visit = ('<span class="btn dim" aria-disabled="true" '
                  'title="该节点已被屏蔽，门户不会转发">访问</span>')
+        # 被屏蔽的节点也**保留**「测试」按钮，但禁用 —— 而且类名与可用的一致
+        # （都带 probe）。为什么不干脆不渲染它：一张卡片上「访问」灰着、
+        # 「测试」却整个消失，用户会以为是自己看错了；两个都灰着、并给出
+        # "为什么不能测"的 title，才是诚实的。类名统一也让"页面上所有测试按钮"
+        # 这个集合有确定含义（真机 e2e 就是按 .probe 数按钮的）。
+        probe = ('<button type="button" class="btn probe dim" '
+                 'aria-disabled="true" disabled '
+                 'title="该节点已被屏蔽，无从测试">测试</button>')
 
     rows = []
     rows.append('<div class="card"><div class="top">'
-                '<div><h3>%s</h3>'
-                '<span class="dot %s"></span>%s '
-                '<span class="mono">%s</span></div></div>'
-                % (name, dot, status, mount))
+                '<h3>%s</h3>'
+                '<span class="pill %s">%s</span>'
+                '</div>'
+                % (name, pill, status))
     rows.append('<div class="meta">对外路径：<span class="mono">%s</span> · '
                 '转发到：<span class="mono">%s</span></div>' % (mount, target))
     if note:
@@ -610,9 +669,23 @@ def _service_card(svc, public_url):
         rows.append('<div class="warn">上游 %s 没有响应 —— 请用它自己的方式'
                     '启动该程序（本页只负责转发）。</div>'
                     % escape_html(target))
-    rows.append('<div class="actions">%s</div>' % visit)
+    rows.append('<div class="actions">%s%s</div>' % (visit, probe))
+    # 测试结果就地显示（JS 写入；无 JS 时保持隐藏，不影响阅读）
+    rows.append('<div class="result" data-result="%s" hidden></div>' % probe_href)
     rows.append('</div>')
     return "".join(rows)
+
+
+def path_quote(s):
+    """URL 路径引用：编码非 ASCII 与危险字符，但**保留 `/`**。
+
+    必须和 urllib_quote（safe=""）区分开：
+      · urllib_quote 用于**单段**（例如路由 key），`/` 也会被编码成 %2F；
+      · path_quote 用于**整条路径**（/alpha/），`/` 是分隔符，编码了就不是路径了。
+    用错的表现：data-probe 变成 "%2Falpha%2F"，点「测试」永远 404，而页面看着正常。
+    """
+    import urllib.parse
+    return urllib.parse.quote(s, safe="/")
 
 
 def urllib_quote(s):
@@ -672,16 +745,17 @@ def console_html(state, *, is_public=False, extra_head=""):
             '<meta name="robots" content="noindex,nofollow">'
             '<title>对外服务门户</title><style>%s</style></head><body>'
             '<div class="wrap">'
-            '<h1>对外服务门户</h1>'
-            '<p class="sub">这里能打开本机已发布的节点。当前分类：'
-            '<strong>%s</strong> · 端口 %d</p>'
+            '<div class="top"><h1>对外服务门户</h1>'
+            '<span class="badge">%s</span></div>'
+            '<p class="sub">这里能打开本机已发布的节点，也能就地测每个节点通不通。'
+            '端口 %d</p>'
             '<!-- 由 console_html 渲染，勿手改。用户输入均经转义。 -->'
             '%s'
             '<section><h2>访问地址</h2>%s%s</section>'
             '<section><h2>已发布的节点</h2>%s</section>'
             '<section><h2>怎么管理</h2>'
-            '<p class="note">这个页面是<b>只读</b>的测试页与入口页：点上面的「访问」'
-            '就能试每个节点通不通。<br>'
+            '<p class="note">这个页面是<b>只读</b>的测试页与入口页：点「测试」就地看每个'
+            '节点通不通，点「访问」直接打开它。<br>'
             '要<b>添加节点、开放或屏蔽、改路由</b>，请到 DSH 里打开'
             '<b>设置 → 插件 → dsh-service-portal → 配置</b>'
             ' —— 那里是唯一的设置入口。</p>'
@@ -689,18 +763,81 @@ def console_html(state, *, is_public=False, extra_head=""):
             '<b>不会</b>停止上游程序；上游请用它自己的方式启动。</p>'
             '</section>'
             '<footer>安全提示：外网访问需要口令；内网免密。门户端口 %d，'
-            '当前分类：%s。请不要在公网长期暴露管理口令。</footer>'
+            '当前分类：%s。请不要在公网长期暴露管理口令。<br>'
+            '<a class="credit" href="%s" target="_blank" rel="noreferrer noopener" '
+            'title="去 GitHub 给这个项目留颗 Star">鼓励一下 ★</a></footer>'
             '</div>'
             '<script>'
+            # 复制
             'document.querySelectorAll(".copy").forEach(function(btn){'
             'btn.addEventListener("click",function(){'
             'var u=btn.getAttribute("data-copy");'
-            'if(navigator.clipboard)navigator.clipboard.writeText(u);'
-            '});});</script>'
+            'function done(t){var o=btn.textContent;btn.textContent=t;'
+            'setTimeout(function(){btn.textContent=o;},1200);}'
+            'if(navigator.clipboard&&navigator.clipboard.writeText){'
+            'navigator.clipboard.writeText(u).then(function(){done("已复制");},'
+            'function(){done("复制失败");});}'
+            'else{var t=document.createElement("textarea");t.value=u;'
+            'document.body.appendChild(t);t.select();'
+            'try{document.execCommand("copy");done("已复制");}'
+            'catch(e){done("复制失败");}document.body.removeChild(t);}});});'
+            # 测试：**就地**请求一次这个节点（走门户自己的转发路径），把结论写回卡片。
+            # 注意：这里 probe 的是**相对路径**（/xxx/），所以从内网、公网打开都能用，
+            # 不必知道当前域名 —— 也就不会因为外网域名变了而失效。
+            #
+            # 为什么**不**用 redirect:"manual"（我第一版写错、已改）：按 Fetch 规范
+            # manual 返回的是 opaque-redirect，**status 恒为 0**、读不到任何信息。
+            # 而"上游把 / 重定向到 /login"极其常见，那样会把一个正常的服务报成
+            # "状态 0"。所以这里跟随后续跳转，拿真实状态码。
+            'function probe(btn){'
+            'var path=btn.getAttribute("data-probe");'
+            'var card=btn.closest(".card");'
+            'var box=card.querySelector(".result");'
+            'var old=btn.textContent;btn.disabled=true;btn.textContent="测试中…";'
+            'box.hidden=false;box.className="result pending";'
+            'box.textContent="正在通过门户请求 "+path+" …";'
+            'var started=Date.now();'
+            'fetch(path,{method:"GET",cache:"no-store",headers:{"Accept":"text/html,*/*"}})'
+            '.then(function(res){'
+            'var ms=Date.now()-started;'
+            'if(res.status>=200&&res.status<400){'
+            'box.className="result ok";'
+            'box.textContent="通了：HTTP "+res.status+"（"+ms+" ms）。'
+            '门户已把请求转发到上游，上游有响应。";'
+            'return null;}'
+            'if(res.status===502){'
+            # 502 可能是门户自己发的（上游不可达），也可能是上游自己就返回 502。
+            # 门户那条的正文固定是 "502 Bad Gateway：上游 ..." —— 读一小段就能区分，
+            # 不要把上游自己的 502 冤枉成"没启动"。
+            'return res.text().then(function(t){'
+            'var mine=(t||"").indexOf("上游")>=0&&(t||"").indexOf("Bad Gateway")>=0;'
+            'box.className="result bad";'
+            'box.textContent=mine'
+            '?("不通：HTTP 502（"+ms+" ms）。门户转发过去了，但上游没响应 —— '
+            '请用它自己的方式启动那个程序，再重新测试。")'
+            ':("上游有响应，但它自己返回了 HTTP 502（"+ms+" ms）—— '
+            '上游程序在线，是它内部出了问题，请看它自己的日志。");'
+            'return null;});}'
+            'box.className="result bad";'
+            'box.textContent="上游有响应，但状态是 HTTP "+res.status+"（"+ms+" ms）。'
+            '上游活着，只是这个请求被它拒绝了（可能要登录、或入口路径不对）。";'
+            'return null;'
+            '})'
+            '.catch(function(err){'
+            'var ms=Date.now()-started;box.className="result bad";'
+            'box.textContent="请求没能完成（"+ms+" ms）："'
+            '+(err&&err.message?err.message:String(err))'
+            '+" —— 门户进程可能刚重启过，或上游把连接中断了。";'
+            '})'
+            '.then(function(){btn.disabled=false;btn.textContent=old;});'
+            '}'
+            'document.querySelectorAll(".probe").forEach(function(btn){'
+            'btn.addEventListener("click",function(){probe(btn);});});'
+            '</script>'
             '</body></html>'
             % (_CSS, escape_html(tag), int(portal_port),
                extra_head, addr_html, qr_img, list_block,
-               int(portal_port), escape_html(tag))).encode("utf-8")
+               int(portal_port), escape_html(tag), REPO_URL)).encode("utf-8")
     return html
 
 
