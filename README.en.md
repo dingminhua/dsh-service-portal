@@ -53,7 +53,7 @@ not design mockups.
 
 | Phone (light) | Phone (dark) | Wide |
 | :---: | :---: | :---: |
-| <img src="docs/assets/portal-phone.png" width="220" alt="portal page, phone, light"> | <img src="docs/assets/portal-phone-dark.png" width="220" alt="portal page, phone, dark"> | <img src="docs/assets/portal-wide.png" width="420" alt="portal page, wide"> |
+| <img src="https://raw.githubusercontent.com/dingminhua/dsh-service-portal/main/docs/assets/portal-phone.png" width="220" alt="portal page, phone, light"> | <img src="https://raw.githubusercontent.com/dingminhua/dsh-service-portal/main/docs/assets/portal-phone-dark.png" width="220" alt="portal page, phone, dark"> | <img src="https://raw.githubusercontent.com/dingminhua/dsh-service-portal/main/docs/assets/portal-wide.png" width="420" alt="portal page, wide"> |
 
 ## How it works
 
@@ -202,7 +202,7 @@ $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-r
 
 # End-to-end acceptance: launches the real portal process and verifies
 # LAN-is-free / public-needs-password / console-manages-services / rate limit / health
-python -X utf8 test\acceptance_portal.py    # 29 checks
+python -X utf8 test\acceptance_portal.py    # 30 checks
 ```
 
 ## Relationship with sibling plugins

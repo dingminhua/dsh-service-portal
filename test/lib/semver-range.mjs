@@ -5,23 +5,53 @@
 //
 // 为什么不用正则「看起来像」就放行：那样写对正则、行为仍然错也能绿。这里真算一遍。
 //
-// **认不出的语法一律抛错**（`^`、`~`、`x` 通配、不完整版本号如 "4"）——
+// **认不出的语法一律抛错**（`^`、`~`、`x` 通配、不完整版本号如 "4"、前导零如 "01.2.3"）——
 // 宁可炸，也不要在一个自己没读懂的范围上假装通过。这正是本仓库
 // 「依赖缺失必须跳过并返回 2，不得静默通过」的同一条纪律。
+//
+// 前导零为什么要单独卡：`01.2.3` / `1.2.3-alpha.01` 在 semver 里是**非法**的，
+// node-semver 一律判 false；而正则 `\d+` 会放行、`Number()` 又会把 `"01"` 悄悄吃掉，
+// 于是本判定器会给出一个**静默的错答案**。非法输入必须抛，不能假装算出来了。
 
-const FULL = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const FULL = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
+
+/** semver 规定：数字标识符不得有前导零（"0" 本身除外）。 */
+function hasLeadingZero(id) {
+  return id.length > 1 && id[0] === "0";
+}
 
 function parse(v, where) {
   const s = String(v).trim();
-  if (!FULL.test(s)) {
+  const m = FULL.exec(s);
+  if (!m) {
     throw new Error(
       `不支持的版本写法：${JSON.stringify(s)}（${where}）—— ` +
       `本判定器只认完整的 x.y.z[-pre]；遇到新语法请在此实现，不要静默放过`);
   }
-  const i = s.indexOf("-");
-  const core = i === -1 ? s : s.slice(0, i);
-  const pre = i === -1 ? null : s.slice(i + 1);
-  return { nums: core.split(".").map(Number), pre, raw: s };
+  // 主版本三段：数字段不得有前导零
+  for (const seg of [m[1], m[2], m[3]]) {
+    if (hasLeadingZero(seg)) {
+      throw new Error(
+        `非法的版本写法：${JSON.stringify(s)}（${where}）—— ` +
+        `数字标识符不得有前导零（semver 规定；node-semver 会判它无法解析）。` +
+        `不要静默当成合法版本算下去`);
+    }
+  }
+  // 预发布段：逐个标识符查，数字型同样不得有前导零
+  const pre = m[4] ?? null;
+  if (pre !== null) {
+    for (const id of pre.split(".")) {
+      if (/^\d+$/.test(id) && hasLeadingZero(id)) {
+        throw new Error(
+          `非法的版本写法：${JSON.stringify(s)}（${where}）—— ` +
+          `预发布里的数字标识符 ${JSON.stringify(id)} 有前导零，semver 不允许`);
+      }
+    }
+    if (pre.split(".").some((id) => id === "")) {
+      throw new Error(`非法的版本写法：${JSON.stringify(s)}（${where}）—— 预发布段有空标识符`);
+    }
+  }
+  return { nums: [Number(m[1]), Number(m[2]), Number(m[3])], pre, raw: s };
 }
 
 function cmpPre(a, b) {

@@ -86,8 +86,19 @@ npm publish        # dsh-service-portal
 > `exports["./client"]` 指向它——2026-10-15 曾因产物缺失导致 DSH 启动期
 > `ERR_PACKAGE_PATH_NOT_EXPORTED` 致命错误。
 >
-> npm 只发布 `package.json` 的 `files` 白名单内容（`lib`、`icons`、`cordis.patch.yml`、README、
-> CHANGELOG、声明、LICENSE）。`npm pack --dry-run` 可预览将发布的文件清单。
+> npm 只发布 `package.json` 的 `files` 白名单内容（`lib`、**`tools`**、`icons`、
+> `cordis.patch.yml`、README、CHANGELOG、声明、LICENSE）。`npm pack --dry-run` 可预览将发布的文件清单。
+>
+> ⚠️ **发布前必须确认包里有 `tools/` 的运行期脚本**：2026-10-16 的 v0.8.6 之前，
+> `files` 白名单漏了 `tools`，打出来的包里**一个 Python 脚本都没有**，用户装完点「开启」
+> 必然失败（`lib/index.js` 是靠 `infraPath/tools/portal_run.py` 启动门户的）。
+> 这个缺陷在 `link:` 本地开发形态下**看不见**（符号链接指向真实仓库，`tools/` 一直都在），
+> 所以必须按「打包后的形状」验证，不能靠跑通本地测试来推断：
+
+```bash
+npm pack --dry-run 2>&1 | grep -E "tools/(portal_run|start_public_gui)\.py"   # 两个入口都要出现
+npm pack --dry-run 2>&1 | grep -c "tools/.*\.py"                              # 应 ≥ 8（运行期 import 闭包）
+```
 
 ### 8. 创建 GitHub Release
 

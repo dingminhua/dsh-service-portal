@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -228,40 +228,67 @@ test("打包契约：包里每个运行期 import 的 bare specifier 都必须�
   // ERR_MODULE_NOT_FOUND，插件整个加载不了。
   //
   // 教训：单测跑在开发检出上，永远看得见本地 node_modules，所以**看不见**
-  // 「新装用户缺什么」。这条断言不看本地装了什么，而是静态解析
-  // lib/index.js / lib/client.js 的 import，逐个要求：
+  // 「新装用户缺什么」。这条断言不看本地装了什么，而是静态解析 lib/ 下**所有**
+  // .js 产物的 import，逐个要求：
   //   - node: 内置 -> 不用管
   //   - 相对路径 -> 必须真实存在
   //   - bare specifier -> 必须在 dependencies 或 peerDependencies 里被声明
-  // 这样任何「新增 import 但忘了声明依赖」都会当场失败。
+  //
+  // 注意覆盖范围（初版这里只扫 lib/index.js + lib/client.js，且正则漏掉动态
+  // import()，被对抗性复核当场指出 —— 所以现在三处都补齐了）：
+  //   1. 扫 lib/ 下**全部** .js，而不只是两个已知文件（将来加文件不会漏网）
+  //   2. 正则同时覆盖 `import x from "p"`、`import "p"`、`import("p")`、
+  //      `require("p")`，以及模板字面量 `import(\`p\`)`
+  //   3. 顺带扫 .mjs 残留（若将来产物形态变化）
   const bare = new Set();
   const relative = new Set();
+  const SPEC = String.raw`["'\`]([^"'\`]+)["'\`]`;
+  const re = new RegExp(
+    // import x from "p" / import "p" / import("p") / require("p") / require(`p`)
+    // **不加行首锚点** —— `await import("p")` / `const x = require("p")`
+    // 这类真实写法都不在行首，加锚点就会漏掉（对抗性复核指出过这一点）。
+    String.raw`(?:import\s+[^;\n]*?\sfrom\s*|import\s*|import\s*\(\s*|require\s*\(\s*)` + SPEC,
+    "g",
+  );
   const scan = (file, source) => {
-    const re = /(?:^|\n)\s*(?:import\s[^;]*?from\s*|import\s*|require\()\s*["']([^"']+)["']/g;
     let m;
+    re.lastIndex = 0;
     while ((m = re.exec(source)) !== null) {
       const spec = m[1];
+      if (!spec) continue;
       if (spec.startsWith("node:")) continue;
       if (spec.startsWith(".") || spec.startsWith("/")) relative.add(`${file}\u0000${spec}`);
       else bare.add(spec);
     }
   };
-  scan("lib/index.js", readFileSync(join(ROOT, "lib", "index.js"), "utf8"));
-  scan("lib/client.js", bundle);
+  // lib/ 下所有 .js 都扫（不只两个已知入口）
+  const libFiles = readdirSync(join(ROOT, "lib"))
+    .filter((f) => f.endsWith(".js") || f.endsWith(".mjs"));
+  assert.ok(libFiles.length > 0, "lib/ 下没有找到任何产物文件");
+  for (const f of libFiles) {
+    scan(`lib/${f}`, f === "client.js" ? bundle : readFileSync(join(ROOT, "lib", f), "utf8"));
+  }
 
   const declared = new Set([
     ...Object.keys(pkg.dependencies ?? {}),
     ...Object.keys(pkg.peerDependencies ?? {}),
     ...Object.keys(pkg.optionalDependencies ?? {}),
-    // 客户端产物由宿主提供，凭 react 走宿主
+    // 客户端产物由**宿主**在运行期注入，不走 npm 依赖解析：
+    //   · react —— 工厂体 `var React = require("react")`，宿主提供（不能进 dependencies，
+    //     否则会装出第二份 React，hooks 直接崩）
+    //   · 两个 @deepseek-ai 包 —— 宿主单例
+    // 这里是**显式**白名单而不是「凡 peerMeta 里有就算」：宿主注入哪些是事实，
+    // 写出来才能被 review；偷偷放宽会让一个真的漏声明的包混过去。
     ...Object.keys(pkg.peerDependenciesMeta ?? {}),
   ]);
+  // 宿主注入的内置模块（不走 npm 解析）。新增前请先确认宿主确实提供。
+  const HOST_PROVIDED = new Set(["react", "react-dom", "react/jsx-runtime"]);
 
   const undeclared = [...bare].filter((s) => {
-    if (declared.has(s)) return false;
+    if (declared.has(s) || HOST_PROVIDED.has(s)) return false;
     // 子路径导入（如 `pkg/sub`）按其包名归属
     const pkgName = s.startsWith("@") ? s.split("/").slice(0, 2).join("/") : s.split("/")[0];
-    return !declared.has(pkgName);
+    return !declared.has(pkgName) && !HOST_PROVIDED.has(pkgName);
   });
   assert.deepEqual(undeclared, [],
     "产物里 import 了没声明的依赖 —— 新装用户会直接加载失败："

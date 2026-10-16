@@ -80,26 +80,38 @@
   - `cordis` peer 范围必须放行全部已发布版本、且拒绝 `5.x`
   - `schemastery` peer 范围必须放行全部已发布版本、且拒绝 `4.x`
   - **产物里每个 bare import 都必须有对应声明** —— 这条是那次事故的通用化收口：
-    静态解析 `lib/index.js` / `lib/client.js` 的 import，逐个要求能在
-    `dependencies`/`peerDependencies` 里找到归属，相对导入必须真实存在。
-    今后任何「加了 import 却忘了声明依赖」都会当场失败。
+    静态解析 `lib/` 下**全部** `.js` 的 import（`import x from` / `import "p"` /
+    `import("p")` / `require("p")` / 模板字面量，且不限行首），逐个要求能在
+    `dependencies`/`peerDependencies` 里找到归属（宿主注入的 `react` 走显式白名单），
+    相对导入必须真实存在。今后「加了 import 却忘了声明依赖」会当场失败。
+
+    > 初版这条只扫 `lib/index.js` + `lib/client.js`，且正则漏掉 `await import("p")`
+    > 这类不在行首的动态导入 —— 被发布前的对抗性复核当场指出并补齐。
+    > 记在这里是因为它说明一件事：**「我已加了兜底检验」本身也需要被验**。
 
   每条都用**退回旧写法**验过会失败（可证伪，不是装饰）。
 
 - 新增 `test/lib/semver-range.mjs`：极简 semver 判定器，用于 peer 范围断言。
   不引第三方测试依赖（CI 只装 schemastery），且**认不出的语法一律抛错**，
-  而不是「看着像就放行」——`>=4`、`^3.18.4`、`4.x` 都会直接抛错。
-  已与真 `semver` 对比 **144 组用例、0 处差异**。
+  而不是「看着像就放行」——`>=4`、`^3.18.4`、`4.x` 都会直接抛错；
+  非法版本（前导零如 `1.2.3-alpha.01`，node-semver 判 false）同样抛错，
+  不会静默给出一个错的布尔值。已与真 `semver` 对比
+  **2808 组用例（含 alpha/beta/rc × 数字标识符的预发布组合）、0 处差异**。
 
 ### Docs
 
 - 修正测试数字漂移：README 两处「24 / 17 项」与「46 项」→ 实测 **50 / 28 项**；
-  README.en.md 同步；RELEASING.md 的「18 / 14 项」→ **50 / 28 项**。
+  README.en.md 同步；RELEASING.md 的「18 / 14 项」→ **50 / 28 项**；
+  `test/acceptance_portal.py` 的「29 项」→ 实跑 **30/30**（README.md 两处 + README.en.md）。
 - README / README.en.md 的控制检验概述改为与仓库实际一致
   （26 个 Python 控制检验脚本 + 8 个端到端脚本 + 78 项 Node 检验）。
 - 新增「界面」章节与截图：`docs/assets/` 三张（窄屏浅色 / 窄屏深色 / 宽屏）
   由 `tools/shoot_portal.py` 用**真门户进程 + 无头浏览器**实拍；根目录
   `screenshots.json` 按注册表约定声明（awesome-dsh-plugin 推荐项）。
+  README 里用**绝对 URL** 引用这三张图：`docs/` 不在 npm 包的 `files` 白名单里，
+  相对路径在 npmjs.com 上会裂图。
+- RELEASING.md 第 7 步补上 `tools/` 的发布前断言（`npm pack --dry-run` 必须看到
+  两个入口脚本），否则 v0.8.6 修掉的「包里没有运行期脚本」可以无声复现。
 
 ## 0.8.5 (2026-10-16)
 

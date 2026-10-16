@@ -74,7 +74,7 @@
 
 | 窄屏（浅色） | 窄屏（深色） | 宽屏 |
 | :---: | :---: | :---: |
-| <img src="docs/assets/portal-phone.png" width="220" alt="门户页 窄屏 浅色"> | <img src="docs/assets/portal-phone-dark.png" width="220" alt="门户页 窄屏 深色"> | <img src="docs/assets/portal-wide.png" width="420" alt="门户页 宽屏"> |
+| <img src="https://raw.githubusercontent.com/dingminhua/dsh-service-portal/main/docs/assets/portal-phone.png" width="220" alt="门户页 窄屏 浅色"> | <img src="https://raw.githubusercontent.com/dingminhua/dsh-service-portal/main/docs/assets/portal-phone-dark.png" width="220" alt="门户页 窄屏 深色"> | <img src="https://raw.githubusercontent.com/dingminhua/dsh-service-portal/main/docs/assets/portal-wide.png" width="420" alt="门户页 宽屏"> |
 
 ## 工作原理
 
@@ -282,7 +282,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 脚本 | 项数 | 覆盖 |
 | :--- | ---: | :--- |
-| `test/acceptance_portal.py` | 29 | 页面增删改开关服务、路由改动生效、内网免密/外网口令、二维码/手机端/限速/健康检查真实性、三分类 fail-closed、依赖缺失返回 2 |
+| `test/acceptance_portal.py` | 30 | 页面增删改开关服务、路由改动生效、内网免密/外网口令、二维码/手机端/限速/健康检查真实性、三分类 fail-closed、依赖缺失返回 2 |
 | `test/test_autostart.py` | 4 | **插件加载后门户自动跑起来**（「装好即用」）、只开内网、内网地址可用 |
 | `test/test_lan_address.py` | 16 | **网卡评分选地址**（物理网卡优先、198.18.x 降权）、手动选地址立即生效、非法地址被拒、覆盖值落盘 |
 | `test/test_lan_toggle.py` | 10 | 内网口令开关**立即生效**（不重启门户）、本机永远免密、公网不受影响 |
@@ -401,7 +401,7 @@ $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-r
 & $node --test test/client.test.mjs    # 28 项客户端分发契约检验
 
 # 端到端验收：真起门户进程，逐条验证「内网免密/外网口令/页面管理服务/限速/健康检查」
-python -X utf8 test\acceptance_portal.py    # 29 项
+python -X utf8 test\acceptance_portal.py    # 30 项
 
 # 认证层与路由层的控制检验（纯标准库）
 python -X utf8 tools\check_portal_auth.py    # 35 项：登录页/会话/认证前置
