@@ -660,7 +660,8 @@ def console_html(state, *, is_public=False, extra_head=""):
     if services:
         cards = "".join(_service_card(s, public_url) for s in services)
     else:
-        cards = ('<p class="note">还没有节点。到 DSH 的「设置 → 对外服务门户」里'
+        cards = ('<p class="note">还没有节点。到 DSH 的'
+                 '「设置 → 插件 → dsh-service-portal → 配置」里'
                  '点「添加节点」把本机的一个端口发布出来，这里就会列出来。</p>')
     # 空态面板仍展示在服务列表标题
     list_block = ('<div class="grid">%s</div>' % cards) if (cards.startswith('<div class="card"')) \
@@ -682,7 +683,8 @@ def console_html(state, *, is_public=False, extra_head=""):
             '<p class="note">这个页面是<b>只读</b>的测试页与入口页：点上面的「访问」'
             '就能试每个节点通不通。<br>'
             '要<b>添加节点、开放或屏蔽、改路由</b>，请到 DSH 里打开'
-            '<b>设置 → 对外服务门户</b> —— 那里是唯一的设置入口。</p>'
+            '<b>设置 → 插件 → dsh-service-portal → 配置</b>'
+            ' —— 那里是唯一的设置入口。</p>'
             '<p class="note">「屏蔽」只表示门户不再转发这条路由，'
             '<b>不会</b>停止上游程序；上游请用它自己的方式启动。</p>'
             '</section>'

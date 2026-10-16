@@ -190,8 +190,7 @@ def main():
     # 「对齐能力」≠「替换身份」：dsh-pocket 叫「手机访问」是因为它整个插件的使命
     # 就是手机访问；我们是「把本机服务对外发布并统一管理」，扫码只是入口之一。
     print("\n[标题：本插件身份，不照抄参考对象]")
-    check("标题是「对外服务门户」", '"对外服务门户"' in client,
-          "（settings.section 的 label 也是它）")
+    check("标题是「对外服务门户」", '"对外服务门户"' in client)
     check("标题**不是** dsh-pocket 的「手机访问」",
           'styles.title }, "手机访问"' not in client,
           "（这是踩过的坑，别再抄）")
@@ -199,9 +198,41 @@ def main():
           "在那里管理要开放的服务" in client)
     check("副标题**不是** dsh-pocket 的「实时同步」",
           "实时同步" not in client)
-    check("小标题与 settings.section 的 label 一致（面板标签不打架）",
+    check("标题文案统一（面板内多处一致）",
           client.count('"对外服务门户"') >= 2,
           "出现次数=%d" % client.count('"对外服务门户"'))
+
+    # ================= ①b 注册位置：插件页，不是宿主设置导航 =================
+    #
+    # 用户要求：「插件设置要放到插件设置里，而不是出现在宿主的设置里，
+    # 你看看 workbuddy 是怎么做的」。
+    #
+    # 实测（cordis_inspect Slots）：
+    #   · `settings.section` 的 occupants 里原先有 `service-portal`，
+    #     也就是说它出现在**宿主设置左侧导航**（和通用/模型/插件并列）；
+    #   · workbuddy / dsh-subagent-default-model **完全不用** settings.section，
+    #     只注册 `plugins.bundle.config` 与 `plugins.row.config`。
+    print("\n[①b 注册在插件页的插件配置里，不在宿主设置导航]")
+    check("**不再**注册 settings.section",
+          'inject("settings.section"' not in client
+          and 'name: "settings.section"' not in client)
+    check("注册到 plugins.bundle.config（插件自己的配置区）",
+          'plugins.bundle.config' in client)
+    check("注册到 plugins.row.config（行入口的配置页）",
+          'plugins.row.config' in client)
+    check("键按 `<包名>#<行 id>` 拼（行入口的 keyDomain 就要求这个形状）",
+          "`${key}#${key}`" in client or "#${key}" in client)
+    check("两种包名拼写都注册（裸名 + include: 前缀）",
+          "CARD_KEYS" in client and "include:${PKG}" in client,
+          "（只注册裸名会让 include: 挂载下**整页空白且不报错**）")
+    check("一次注册失败不影响另一个（每个槽位独立 try/catch）",
+          "槽位" in client and "注册失败" in client)
+    check("**不把 settingsScope 列进 inject**（0.1.7+ 已移除，"
+          "硬依赖会导致 apply 永不执行）",
+          '"settingsScope"' not in client.split("const inject")[1].split(";")[0]
+          if "const inject" in client else True)
+    check("处理 view='summary'（插件页折叠态要有一行摘要，不能是空壳）",
+          '"summary"' in client and "view ===" in client)
 
     # ================= ② 局域网口令独立 =================
     print("\n[② 局域网口令：随机 + 自定义，与公网分开]")
@@ -448,7 +479,7 @@ def main():
     check("门户页保留「访问」（这就是测试页的用处）",
           'class="btn primary" href=' in console and "访问" in console)
     check("门户页说明自己是只读 + 去哪管理（引导）",
-          "只读" in console and "设置 → 对外服务门户" in console)
+          "只读" in console and "设置 → 插件 → dsh-service-portal → 配置" in console)
     check("门户页讲清「屏蔽」不停止上游程序",
           "不会</b>停止上游程序" in console or "不会停止上游程序" in console)
     check("门户页能显示「已屏蔽」与「上游未响应」两种状态",

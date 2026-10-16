@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.8.3 (2026-10-16)
+
+用户：「插件设置要放到插件设置里，而不是出现在宿主的设置里，你看看 workbuddy
+是怎么做的」。
+
+### 找到了 —— 我注册错槽位了
+实测（`cordis_inspect` 查活的 Slot 树）：
+
+| | 我（原样） | workbuddy |
+| :--- | :--- | :--- |
+| 槽位 | `settings.section` | `plugins.bundle.config` + `plugins.row.config` |
+| 出现位置 | **宿主设置的左侧导航**（和「通用 / 模型 / 插件」并列） | **插件页里该插件自己那页** |
+
+`settings.section` 的 occupants 里原先明明白白有
+`{ registrant: "dsh-service-portal", id: "service-portal", order: 40 }` ——
+所以我做的其实是"宿主设置里的一个独立页面"，而不是"这个插件的设置"。
+workbuddy 与本地兄弟 `dsh-subagent-default-model` **完全不用** `settings.section`。
+
+### 改法
+- 改注册 `plugins.bundle.config`（bundle 页里的配置区）与
+  `plugins.row.config`（行入口的独立配置页，键是 `<包名>#<行 id>`）；
+- **两种包名拼写都注册**（裸名 + `include:` 前缀）：插件页按 key 精确匹配库存
+  里的包名，而部署可以用任意名字挂载 —— workbuddy 的 issue #55 就是只注册了
+  裸名、实际挂在 `include:` 前缀下，结果**整页空白且不报任何错**；
+- 每个槽位独立 try/catch（一个失败不带下另一个），失败时 `console.error` 写明
+  是哪个槽位哪个 key —— 让"没出现"和"成功了"可区分；
+- 处理 `view` 属性：`summary` 只回一行摘要（插件页折叠态），`page` 出完整配置页。
+
+### 一个差点踩中的坑
+我一度把 `settingsScope` 加进 `inject`，想让配置卡片能用宿主的保存控件 ——
+**这会让整个插件静默失效**：Cordis 的 inject 是硬依赖闸门，列了本运行线不提供
+的服务，`apply` 就永远不会执行。而且本线（0.1.7+）已用 `configForms` 取代
+`settingsScope`。workbuddy 的注释明确警告了这点。已改回只注入两条线都有的服务。
+（要探可能不存在的服务只能用 `ctx.get()`；直接写 `ctx.settingsScope` 会**抛异常**。）
+
+### 检验
+- `test/client.test.mjs` 新增**行为断言**（19 项）：真的执行产物里的 factory、
+  真的调 `apply(mockCtx)`，然后断言注册收到的 `name`/`key`。
+  为什么要这么做：只做源码正则的话，正则只能证明"字符串在文件里"，证明不了
+  "注册真的发生了、键的形状对" —— 本轮正是栽在这，正则一路绿灯而位置是错的。
+- **反例已验**：把注册临时改回 `settings.section`、重新构建，该测试确实转红
+  （`没有注册 plugins.bundle.config；实际=["settings.section"]`），
+  还原后转绿 —— 证明它不是"永真"的测试。
+- parity 校验新增 8 项（含"不再注册 settings.section"的反向断言），共 134 项。
+- 全量：23 项控制检验 + 50 项 host + 19 项 client + 7 项 e2e 全通过。
+
 ## 0.8.2 (2026-10-16)
 
 用户一口气定了六条，其中**第 2 条纠正了我上一版的理解**：

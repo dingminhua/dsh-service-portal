@@ -125,7 +125,7 @@ def main():
               b'name="name"' not in body and b'name="mount"' not in body
               and b"<form" not in body)
         check("①b2 门户页引导去插件设置里管理",
-              "设置 → 对外服务门户".encode() in body)
+              "设置 → 插件 → dsh-service-portal → 配置".encode() in body)
 
         status, body, _ = call("/_api/services", LAN_HOST, method="POST",
                                data=json.dumps({

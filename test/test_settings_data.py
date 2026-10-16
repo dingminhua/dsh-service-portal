@@ -102,7 +102,7 @@ def main():
               b'name="mount"' not in body and b'name="target"' not in body
               and b"<form" not in body)
         check("门户页引导去插件设置里管理",
-              "设置 → 对外服务门户".encode() in body)
+              "设置 → 插件 → dsh-service-portal → 配置".encode() in body)
 
         # 5. 切内网口令后状态与行为一致
         portal_call("/_api/settings", "POST",
