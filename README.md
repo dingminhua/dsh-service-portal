@@ -214,6 +214,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `tools/check_public_pin.py` | 18 | 公网密码自定义：**新密码真能登录、旧密码真的作废**（拿会话 cookie 当判据）、重启后仍在；安全负例：不能用局域网口令当公网密码、太短/空白被拒 |
 | `tools/check_portal_discover.py` | 25 | 服务自动发现的**安全分级**：DSH 自身/本项目隧道/clash/ToDesk/厂商服务必须判 danger（按进程名，不只按端口）、门户端口排除、真起 HTTP 服务验证能被发现、**发现不改注册表** |
 | `tools/check_portal_service_api.py` | 9 | 服务管理接口：门户侧增删启停发现全通；**反例**——门户没跑时转发必须返回 ok:false（上一轮的"静默忽略却弹成功"就是栽在这） |
+| `tools/check_portal_add_route.py` | 10 | 「手动添加」走**宿主 HTTP 路由**的端到端：真 `createHandler` + 真门户 + 真磁盘，验启停/删除/发现与反例（target 非法必须 400 + 明确 error） |
 | `tools/check_portal_lan_pin.py` | 23 | 局域网口令刷新/自定义；**公网拿局域网口令能进来**（安全边界）、候选列表没落盘 |
 | `tools/check_portal_form.py` | 8 | **控制台表单提交被当成坏 JSON**（页面上点「添加服务」永远失败）、表单没有 key 字段导致必然失败 |
 | `tools/check_portal_tunnel.py` | 11 | **门户已在跑时「开启公网访问」什么都不做**（幂等检查把建隧道也跳过了）、「关闭公网」把整个门户停掉 |
