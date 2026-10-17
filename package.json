@@ -2,7 +2,7 @@
   "name": "dsh-service-portal",
   "displayName": "DSH Service Portal",
   "description": "对外服务门户：装好即用，设置页内网/公网二维码扫码进控制台管理服务与路由（cloudflared 隧道 + 口令登录，内网免密可开密码、外网必须口令）。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "dingminhua",
   "copyright": "Copyright (c) 2026 LaoDing",
   "license": "MIT",
@@ -17,7 +17,8 @@
   ],
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24",
+    "dsh": ">=0.2.1-rc.1 <0.3.0-0"
   },
   "main": "lib/index.js",
   "icon": "icons/dsh-service-portal-128.png",
@@ -41,10 +42,12 @@
   "scripts": {
     "build": "node client/build.mjs",
     "prepack": "node client/build.mjs",
-    "test": "node --test test/host.test.mjs test/client.test.mjs",
+    "test": "node --test test/host.test.mjs test/client.test.mjs test/manifest.test.mjs",
+    "test:manifest": "node --test test/manifest.test.mjs",
     "check": "npm run build && npm test"
   },
   "dsh": {
+    "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
     },

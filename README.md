@@ -151,6 +151,25 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 > 若旧 profile 仍装有已删除的子插件 `dsh-poker-viewer`，先移除再装根插件：
 > `& $dsh plugin --profile desktop remove dsh-poker-viewer`。
 
+### 兼容的 DSH 版本
+
+从 **1.0.1** 起，本插件在 `package.json` 里声明了新版 DSH 的版本门禁字段：
+
+| 字段 | 值 | 作用 |
+| :--- | :--- | :--- |
+| `engines.node` | `>=24` | 对齐 DSH 0.2.1-rc.1 自带运行时（Node 24.21.0） |
+| `engines.dsh` | `>=0.2.1-rc.1 <0.3.0-0` | **DSH 版本门禁**：声明了它，宿主就只按它判定，忽略 `@deepseek-ai/dsh*` 的 peer 区间 |
+| `dsh.manifestVersion` | `1` | 插件清单格式标识（前瞻声明，当前宿主不强制） |
+
+为什么必须写 `engines.dsh`：旧写法只声明 `@deepseek-ai/cordis` / `schemastery` 的 peer 区间，
+**对 DSH 自身版本没有任何约束** —— 装到不兼容的宿主上会在启动期失败，而发版时毫无提示。
+新版宿主（0.2.1-rc.1 起）的判定顺序是：有 `engines.dsh` 就只看它；没有才逐个检查
+`@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer。两条都不写 = 任何版本都放行。
+
+> 升级 DSH 大版本时，先跑 `npm run test:manifest`。它会调用**宿主自己的**
+> `evaluatePluginCompatibility()` 判定本插件，同时用反例确认判定逻辑确实生效；
+> 找不到宿主运行时则明确 skip（`DSH_APP_BOOT=<dsh 根目录>` 可显式指定），不会假装通过。
+
 ## 配置（DSH 设置页）
 
 | 字段 | 默认 | 说明 |

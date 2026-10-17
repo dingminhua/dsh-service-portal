@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.0.1 (2026-10-17)
+
+**跟进 DSH 0.2.1-rc.1 的清单规范。** 没有任何行为契约变更（1.0.0 冻结的
+13 条承诺原样保留），只补上插件与宿主之间的**版本声明**，并把这件事变成
+可被测试抓住的契约。
+
+### 背景：新版 DSH 多了两道声明
+
+DSH 0.2.1-rc.1 引入插件↔运行时的版本门禁，判定顺序是：清单里有
+`engines.dsh` 就**只看它**；没有才逐个检查 `@deepseek-ai/dsh` /
+`@deepseek-ai/dsh-*` 的 `peerDependencies`。两条都没写 = **任何 DSH 版本都放行**。
+
+1.0.0 恰好属于"两条都没写"：只声明了 `cordis` / `schemastery` 的 peer 区间，
+这对 DSH 自身版本没有任何约束。实测 1.0.0 在 0.2.1-rc.1 上判定为相容
+（不会崩），但这是**运气**——同一个包装在更老的宿主上同样会被放行，然后在
+启动期失败，而发版时毫无提示。
+
+### 清单
+
+- 新增 `engines.dsh: ">=0.2.1-rc.1 <0.3.0-0"`：把"本插件适配哪个 DSH 大版本"
+  从口头约定变成宿主可执行的声明。
+- 新增 `dsh.manifestVersion: 1`：清单格式标识（前瞻声明；当前宿主不强制它，
+  已核实源码中无引用）。
+- `engines.node` 由 `>=22` 提到 `>=24`：对齐 DSH 0.2.1-rc.1 自带运行时
+  （Node 24.21.0）与官方清单示例。
+
+### 测试
+
+- 新增 `test/manifest.test.mjs`（10 项），已并入 `npm test`：
+  - **6 项静态契约**：`engines.dsh` 存在且非空、不以 `workspace:` 开头、
+    `manifestVersion = 1`、`dsh.bundle.patch` 指向真实文件、
+    `dsh.client.platform = web` 且导出了 `./client`、图标是包内相对路径
+    且格式/体积合规（宿主 `readPluginMeta` 会校验这些）。
+  - **4 项门禁检验**：调用**宿主自己的** `evaluatePluginCompatibility()`
+    判定本插件，并用**反例**确认判定逻辑真的生效（篡改成不相容区间后必须翻转；
+    `engines.dsh` 存在时必须忽略敌意 `@deepseek-ai/dsh` peer）。
+- 验证过测试本身有效：把 `engines.dsh` 删掉、或改成 `>=0.3.0 <0.4.0-0`，
+  相应用例立即转红；改回即全绿。
+- **找不到宿主运行时则明确 skip，不假装通过**；`DSH_APP_BOOT=<dsh 根目录>`
+  或 `DSH_RUNTIME_ROOT` 可显式指定。新增 `npm run test:manifest` 单独跑这一组。
+
+### 一个被实测纠正的假设
+
+原以为"漏写 `-rc` 预发布边界"会把最新 rc 挡在门外。实测宿主用
+`semver.satisfies(..., { includePrerelease: true })`，所以 `0.2.1-rc.1` 在
+`>=0.2.0 <0.2.1` 与 `>=0.2.1-rc.1 <0.3.0-0` 下**都命中**。真正的风险是上界
+卡错（如 `>=0.3.0 <0.4.0-0`），由正例与反例共同兜住。测试注释已写明，
+避免后人重蹈这个误判。
+
+### 文档
+
+- README 新增「兼容的 DSH 版本」小节：三个字段的值与作用、为什么必须写
+  `engines.dsh`、升级 DSH 大版本时先跑 `npm run test:manifest`。
+- 顺带核实（未改动，结论记录在此）：宿主端的
+  `plugins.bundle.config` / `plugins.row.config` 两个 keyed slot 在 0.2.1-rc.1
+  中仍存在且语义未变；客户端 bundle 只 `require("react")`，属宿主基线模块表；
+  `ctx.inject(["webServer"])` 软挂载与 `webServer.register({ kind: "prefix" })`
+  的路由契约未变。升级没有带来需要改代码的破坏性变更。
+
 ## 1.0.0 (2026-10-17)
 
 **第一个稳定版。** 从 0.1 到 1.0 的所有行为契约自此冻结：下面这份清单里的
