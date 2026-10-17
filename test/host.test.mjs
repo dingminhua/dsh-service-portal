@@ -28,6 +28,38 @@ const { configOf, pythonFor, readStatus, portListening, passwordArgs } = _intern
 /** 仓库根（用于按源码做启动方式回归）。 */
 const ROOT = resolve(import.meta.dirname, "..");
 
+/**
+ * 删掉测试用的临时目录，**Windows 上要重试**。
+ *
+ * 踩到的真问题（CI 的 windows-latest 必红，ubuntu 绿）：
+ * 子进程刚被 kill，Windows 还没把它的文件句柄释放干净，此时 `rmSync`
+ * 会抛 `EBUSY: resource busy or locked`。POSIX 允许删除仍被打开的文件，
+ * 所以本机 macOS/Linux 永远看不到这个错 —— 这是典型的「只有 CI 才会红」。
+ *
+ * 同步重试（不依赖事件循环）：它在 `finally` 里执行，此时不应再等待任何
+ * 异步时序。Node 自带的 maxRetries 只覆盖部分错误码，EBUSY 在 Windows
+ * 上仍会穿过去，所以外层再包一层。
+ *
+ * **重试耗尽后静默放弃**，这是有意的取舍：临时目录残留只是脏，而让清理失败
+ * 冒泡会把它变成测试失败 —— 那条测试的产品断言明明已经通过了，报红会误导
+ * 排查方向（看起来像门户没停掉，实际只是没删干净）。非 EBUSY/EPERM/ENOTEMPTY
+ * 的错误仍然立即上抛，不掩盖真正的 bug。
+ *
+ * @param {string} dir 要删除的目录
+ */
+function rmTemp(dir) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      return;
+    } catch (error) {
+      if (error?.code !== "EBUSY" && error?.code !== "EPERM" && error?.code !== "ENOTEMPTY") throw error;
+      // 同步忙等 50ms：释放文件句柄不要求事件循环转起来。
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
 /** 造一个假的**基础设施**仓库骨架（含 tools/start_public_gui.py 与 runs/）。 */
 function fakeRepo({ withScript = true, cred = null, state = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), "service-portal-test-"));
@@ -104,7 +136,7 @@ test("pythonFor：配置的路径存在则优先", () => {
     writeFileSync(py, "# stub\n", "utf8");
     assert.equal(pythonFor("D:\\repo", py), py);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -118,7 +150,7 @@ test("pythonFor：宿主 .venv313 存在则用它（Windows 布局）", () => {
     // 传入一个不存在的 configured，验证回退到 .venv313
     assert.equal(pythonFor(root, ""), py);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -278,7 +310,7 @@ test("pythonFor：repoPath 为空时不拼相对路径（否则可能按 cwd 误
       process.chdir(prev);
     }
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -292,7 +324,7 @@ test("pythonFor：repoPath 非空时仍然照旧优先 .venv313", () => {
     writeFileSync(py, "# stub\n", "utf8");
     assert.equal(pythonFor(root, ""), py);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -301,7 +333,7 @@ test("pythonFor：全都不存在则回退到 PATH 的 python", () => {
   try {
     assert.equal(pythonFor(root, ""), "python");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -320,7 +352,7 @@ test("readStatus：启动器脚本缺失 → ok:false 且给具体原因", async
     assert.equal(s.ok, false);
     assert.match(s.problem, /找不到/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -334,7 +366,7 @@ test("readStatus：无凭据文件 → 未启动过，running:false，不报 pro
     assert.equal(s.passwordMode, null);
     assert.equal(s.problem, null);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -351,7 +383,7 @@ test("readStatus：凭据文件在但端口没监听 → running:false 且报告
     assert.equal(s.running, false);
     assert.match(s.problem, /端口都没在监听/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -373,7 +405,7 @@ test("readStatus：凭据文件在且代理端口在听 → running:true", async
     assert.equal(s.endpoints.length, 1);
   } finally {
     server.close();
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -394,7 +426,7 @@ test("readStatus：single-domain 模式透传 baseUrl 与 path", async () => {
     assert.equal(s.endpoints[0].path, "/train/");
   } finally {
     server.close();
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -486,7 +518,7 @@ test("passwordArgs：fixed 模式走临时文件，口令不进命令行", () =>
     // 临时文件内容就是口令
     assert.equal(readFileSync(r.tempFile, "utf8").trim(), "abcdefghijkl");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -712,7 +744,7 @@ test("readPortalStatus：没有状态文件时返回 null（从没启动过）",
   try {
     assert.equal(await _internals.readPortalStatus(root, "D:\\x", 8899), null);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -740,7 +772,7 @@ test("readPortalStatus：未启动时地址用**当前配置端口**，不是上
     assert.ok(!String(s.problem).includes("异常退出"),
       "未启动是正常状态，problem 不该是报警口气");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -761,7 +793,7 @@ test("readPortalStatus：未启动时手动选定的地址排在第一个", asyn
       "手动选的地址必须排第一");
     assert.equal(s.lanUrls.length, 3, "其余候选跟在后面，不能丢");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -787,7 +819,7 @@ test("readPortalStatus：透出服务清单（设置页据此管理服务，不�
     assert.equal(s.servicesDegraded, 1, "只数已启用但上游没响应的");
   } finally {
     server.close();
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -802,7 +834,7 @@ test("readPortalStatus：门户没跑时服务清单是空数组（不是 undefi
     assert.equal(s.servicesAlive, false);
     assert.equal(s.servicesDegraded, 0);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -825,7 +857,7 @@ test("readPortalStatus：透出 publicPinCustom（设置页据此显示「自定
     assert.equal(s.lanPinCustom, false, "两个标记各自独立，不能串");
   } finally {
     server.close();
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -838,7 +870,7 @@ test("readPortalStatus：状态里没写 publicPinCustom 时按 false（不是 u
     const s = await _internals.readPortalStatus(root, "D:\\x", configured);
     assert.equal(s.publicPinCustom, false);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -862,7 +894,7 @@ test("readPortalStatus：真在监听时用状态文件里的地址（不做重�
     assert.equal(s.problem, null, "正常运行时没有 problem");
   } finally {
     server.close();
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -885,7 +917,7 @@ test("readPortalStatus：用户主动停止过就不再报 problem（不是异�
     assert.deepEqual(s.lanUrls, [`http://192.168.71.10:${configured}`],
       "停止后仍然要知道下次会用哪个地址");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -901,7 +933,7 @@ test("readPortalStatus：反例 —— 没写 stopped_clean 时要报出来（�
     assert.ok(String(s.problem || "").includes("没在监听"),
       "不是主动停止就要给出「没在监听」这个事实，problem=%r" % s.problem);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1086,7 +1118,7 @@ test("路由 POST /stop：门户自退成功 → 记下「下次不再自动启�
     assert.equal(editor.calls[0].autoStart, false);
   } finally {
     try { server.close(); } catch { /* 已关 */ }
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1104,7 +1136,7 @@ test("路由 POST /stop：没停掉（端口上没人/失败）→ 偏好一动�
     assert.notEqual(res.status, 200, "没停掉就不能回 200");
     assert.equal(editor.calls.length, 0, "失败路径绝不能改偏好");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1123,7 +1155,7 @@ test("路由 POST /start：启动成功（已在跑，幂等）→ 记下「下�
     assert.equal(editor.calls[0].autoStart, true);
   } finally {
     try { server.close(); } catch { /* 已关 */ }
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1144,7 +1176,7 @@ test("路由 POST /start：开公网未带 disclaimer → 400 拒绝，且不真
     assert.equal(editor.calls.length, 0,
       "被拒的请求绝不能改「下次自动启动」偏好");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1185,7 +1217,7 @@ test("readStatus：把「下次是否自动启动」透出给设置页", async (
     const off = await _internals.readStatus({ ...repoOf(root), autoStart: false });
     assert.equal(off.autoStart, false, "停过之后必须如实报 false");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1254,7 +1286,7 @@ test("退出收尾：pid 不是我们起的 → 不代关（不误杀用户手�
       new Promise((done) => probe.close(done)),
       new Promise((done) => setTimeout(done, 3000)),
     ]);
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1269,7 +1301,7 @@ test("退出收尾：没有本插件启动记录 → 不动（不猜着去杀）
     assert.equal(result.skipped, true);
     assert.equal(result.ok, true, "跳过不算失败，不能拖垮 DSH 退出流程");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1292,7 +1324,7 @@ test("退出收尾：门户已不在运行 → 幂等跳过（退出时不会报
     assert.equal(result.skipped, true);
     assert.match(result.reason ?? "", /不在运行/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmTemp(root);
   }
 });
 
@@ -1309,7 +1341,7 @@ test("退出收尾：pid 匹配且端口在听 → 真的把门户停掉", async
   });
   const root = portalRepo(null);
   const script = join(ROOT, "tools", "portal_run.py");
-  if (!existsSync(script)) { rmSync(root, { recursive: true, force: true }); return; }
+  if (!existsSync(script)) { rmTemp(root); return; }
   // 解释器要按平台挑，不能写死 "python3"。
   //
   // 踩到的真问题（在 Windows 上跑 npm test 必红）：写死 "python3" 时，
@@ -1342,7 +1374,7 @@ test("退出收尾：pid 匹配且端口在听 → 真的把门户停掉", async
       if (spawnError && spawnError.code !== "ENOENT") {
         throw new Error(`spawn ${PY} 失败：${spawnError.message}`);
       }
-      rmSync(root, { recursive: true, force: true });
+      rmTemp(root);
       return;
     }
 
@@ -1364,7 +1396,15 @@ test("退出收尾：pid 匹配且端口在听 → 真的把门户停掉", async
   } finally {
     try { process.kill(-child.pid, "SIGKILL"); } catch { /* 已退 */ }
     try { child.kill("SIGKILL"); } catch { /* 已退 */ }
-    rmSync(root, { recursive: true, force: true });
+    // 先等子进程真的退出（exit 事件），再删目录。
+    // 直接删是 CI 上 EBUSY 的来源：Windows 的句柄要等进程退出后才释放。
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise((done) => {
+        const timer = setTimeout(done, 5000);
+        child.once("exit", () => { clearTimeout(timer); done(); });
+      });
+    }
+    rmTemp(root);
   }
 });
 

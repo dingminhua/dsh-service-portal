@@ -25,7 +25,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # 必须与 package.json 的 engines.node (>=24) 一致。
+          # DSH 0.2.1-rc.1 自带 Node 24.21.0；CI 若仍用 22，
+          # 测出来的环境就和用户真实运行环境不是一回事。
+          node-version: 24
 
       - name: Install dependencies
         run: npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.18.4
@@ -38,6 +41,11 @@ jobs:
 
       - name: Client distribution contract checks
         run: node --test test/client.test.mjs
+
+      - name: Manifest contract checks
+        # 清单字段的静态契约（engines.dsh / manifestVersion / 图标 / exports）。
+        # 门禁组需要宿主运行时，CI 里没有 DSH，会明确 skip —— 这是设计，不是失败。
+        run: node --test test/manifest.test.mjs
 
       - name: Verify package contents
         run: npm pack --dry-run
