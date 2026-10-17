@@ -10,6 +10,8 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from portal_isolation import isolated_runs, portal_env  # noqa: E402
 PORT = 8995
 LAN_HOST = "192.168.77.88:%d" % PORT
 PASSWORD = "lan-toggle-test-password-1"
@@ -44,22 +46,25 @@ def call(path, host=LAN_HOST, method="GET", data=None, ctype=None):
         if setc and "sp_session=" in setc:
             SESSION["cookie"] = setc.split(";")[0]
         return err.code, err.read()
+    except urllib.error.URLError:
+        # 就绪轮询期间端口还没人听是正常现象，不能炸掉整份检验
+        return 0, b""
 
 
 def main():
-    runs = os.path.join(ROOT, "runs")
-    state_file = os.path.join(runs, "portal_state.json")
-    backup = None
-    if os.path.exists(state_file):
-        backup = state_file + ".bak"
-        os.replace(state_file, backup)
+    # 状态目录隔离到临时目录：不碰用户真实 runs/（见 test/portal_isolation.py）
+    with isolated_runs() as runs:
+        return _run(runs)
 
-    log = open(os.path.join(os.path.dirname(state_file), "toggle-test.log"), "wb")
+
+def _run(runs):
+    state_file = os.path.join(runs, "portal_state.json")
+    log = open(os.path.join(runs, "toggle-test.log"), "wb")
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8",
          os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(PORT), "--password", PASSWORD, "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, env=portal_env(runs), stdout=log, stderr=subprocess.STDOUT)
 
     results = []
 
@@ -175,11 +180,7 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
         log.close()
-        for path in (state_file, state_file + ".tmp"):
-            if os.path.exists(path):
-                os.remove(path)
-        if backup and os.path.exists(backup):
-            os.replace(backup, state_file)
+        # 临时目录由 isolated_runs() 整棵删除，无需还原
 
     passed = sum(1 for ok, _, _ in results if ok)
     print("\n内网口令开关验证：%d/%d" % (passed, len(results)))

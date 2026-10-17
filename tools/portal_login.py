@@ -273,3 +273,39 @@ background:rgba(220,38,38,.12);color:#f87171;border:1px solid rgba(220,38,38,.3)
 def unauthorized_html(message="口令错误，请重试。"):
     """登录失败的响应体（用登录页本身，带错误提示）。"""
     return login_page_html(error=message)
+
+
+def lan_disabled_html(title="对外服务门户"):
+    """局域网访问被关掉时，同一 WiFi 的设备看到的页面（HTTP 403）。
+
+    这张页面的唯一职责：让在手机上看的人**一眼知道发生了什么、该谁去做什么**。
+
+    早先这里返回的是登录页 —— 用户会以为自己口令输错了，而实际上是他自己在
+    电脑上把开关关了。最要命的歧义是：**手机用户不是决策者**。那台电脑在旁边，
+    开关只有本机能开。所以文案必须明确「请到电脑上开启」，而不是「请输入口令」。
+    """
+    return ("""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>已关闭 · %s</title><style>
+:root{color-scheme:dark light}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#14161a;color:#e8eaed}
+main{background:#1c1f26;padding:30px 26px;border-radius:16px;width:min(92vw,360px);
+box-shadow:0 12px 40px rgba(0,0,0,.45);border:1px solid #2a2f38}
+.badge{display:inline-block;font-size:11.5px;font-weight:600;letter-spacing:.4px;
+padding:3px 9px;border-radius:999px;background:rgba(180,83,9,.16);color:#e0a458;
+border:1px solid rgba(180,83,9,.35);margin-bottom:14px}
+h1{font-size:17px;margin:0 0 10px;line-height:1.4}
+p{font-size:13px;line-height:1.65;color:#aeb5c0;margin:0 0 12px}
+p:last-child{margin-bottom:0}
+b{color:#e8eaed;font-weight:600}
+</style></head><body><main>
+<span class="badge">局域网访问已关闭</span>
+<h1>这台电脑的门户目前不接受局域网访问</h1>
+<p>不是口令输错了 —— 是门户持有者在<b>电脑上关掉了「局域网访问」开关</b>。
+这个开关只能在那台电脑上操作。</p>
+<p>请电脑那边打开 <b>「设置 → 手机访问 → 局域网访问」</b>，重新打开开关后
+刷新本页即可。<b>公网访问不受这个开关影响</b>，如果你拿到的是公网地址，
+可以用公网地址进入。</p>
+</main></body></html>""" % _escape(title)).encode("utf-8")

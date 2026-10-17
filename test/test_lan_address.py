@@ -2,16 +2,24 @@
 """网卡选择与「高级·手动选地址」的真实进程验证。"""
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from portal_isolation import portal_env  # noqa: E402
+
 PORT = 9021
-GOOD = "192.168.71.10"
+# 这两个**不是**固定值：不同机器网段不同（作者机上是 192.168.71.61，
+# 早先写死 192.168.71.10 就成了"换台机器必失败"的假断言）。
+# 由 main() 按真实探测结果赋值：物理网卡 = 第一个非基准网段的候选。
+GOOD = None
 VIRTUAL = "198.18.0.1"
 
 
@@ -25,16 +33,32 @@ def call(path, method="GET", data=None):
         with urllib.request.urlopen(req, timeout=8) as res:
             return res.status, json.loads(res.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
+        # HTTPError 是 URLError 的**子类**，必须排在前面，否则永远进不来
         raw = err.read().decode("utf-8", "replace")
         try:
             return err.code, json.loads(raw)
         except ValueError:
             return err.code, {"raw": raw[:300]}
+    except urllib.error.URLError:
+        # 就绪轮询期间端口还没人听是正常现象，不能让它把整份检验炸掉
+        return 0, {}
 
 
 def main():
+    global GOOD
     import lan_address
     results = []
+
+    # 按**本机真实情况**定 GOOD：第一个不是基准网段的候选。
+    # 这样在作者的 192.168.71.x、别人的 10.x / 172.16.x 上都能跑。
+    detected = lan_address.detect_lan_candidates()
+    for c in detected:
+        if not lan_address.is_benchmark_ip(c["ip"]):
+            GOOD = c["ip"]
+            break
+    if GOOD is None:
+        print("跳过：本机没有可用的物理网卡地址（没连网线/WiFi）")
+        return 2
 
     def check(label, cond, detail=""):
         results.append(bool(cond))
@@ -60,16 +84,15 @@ def main():
 
     # ---- 2. 真实门户进程：覆盖生效 ----
     print("\n[手动选地址（真实进程）]")
-    runs = os.path.join(ROOT, "runs")
+    # 状态目录隔离到临时目录（见 test/portal_isolation.py）：
+    # 原来是把用户真实 state 文件移走再移回，异常退出会把用户状态留在半残态。
+    runs = tempfile.mkdtemp(prefix="portal-runs-")
     state = os.path.join(runs, "portal_state.json")
-    backup = state + ".lanip-check"
-    if os.path.exists(state):
-        os.replace(state, backup)
     log = open(os.path.join(runs, "lanip-check.log"), "wb")
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8", os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(PORT), "--password", "lanip-check-password-1", "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, env=portal_env(runs), stdout=log, stderr=subprocess.STDOUT)
     try:
         ready = False
         for _ in range(60):
@@ -139,11 +162,7 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
         log.close()
-        for path in (state, state + ".tmp"):
-            if os.path.exists(path):
-                os.remove(path)
-        if os.path.exists(backup):
-            os.replace(backup, state)
+        shutil.rmtree(runs, ignore_errors=True)   # 临时目录整棵删除
 
     passed = sum(1 for ok in results if ok)
     print("\n网卡选择与手动选地址：%d/%d" % (passed, len(results)))

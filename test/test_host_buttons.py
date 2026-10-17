@@ -16,6 +16,15 @@ PORT = 8899
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _get_status_value(key):
+    """读当前状态里的某个字段（收尾核对用）。"""
+    try:
+        _s, st = call("/status")
+        return st.get(key)
+    except Exception:
+        return None
+
+
 def _expected_stamp():
     """当前这份代码的指纹，必须与 lib/index.js 里 CODE_STAMP 的算法一致。
 
@@ -97,6 +106,14 @@ def main():
     # 门户停掉之后并不恢复。现在：先记下现场，结束时恢复回原样。
     was_alive = portal_alive()
 
+    # 还要记下 **autoStart**：宿主路由 `/stop` 会把用户的启停偏好写成 false
+    # （"用户主动停掉的下次就别自动起了"）。这是正确行为，但这个测试是**故意**
+    # 制造一次"用户停止"，若不还原，用户下次开 DSH 门户就不自动起来了 ——
+    # 实测就是这样把用户的门户"关掉"的：状态文件被写成 stopped_clean=true，
+    # 打开设置页看到的是「门户未启动」。
+    _s0, _st0 = call("/status")
+    was_autostart = _st0.get("autoStart")
+
     # 停一次，顺带验证「停止」真的有效（这次修的正是它）
     call("/stop", "POST", {}, timeout=90)
     time.sleep(2)
@@ -143,7 +160,16 @@ def main():
                     stopped.get("stoppedBy") == "self",
                     "stoppedBy=%r" % stopped.get("stoppedBy"))
 
-    # --- 5. 收尾：把现场恢复回原样（进门前在跑的，出去时也要在跑） ---
+    # --- 5. 收尾：把现场恢复回原样 ---
+    # 5a. 先还原 autoStart（必须在重启门户**之前**，否则重启后再改，下一轮
+    #     自动启动的判定仍是错的）。暂停过程中它被 /stop 改成了 false。
+    if isinstance(was_autostart, bool):
+        status, _ = call("/settings", "POST", {"autoStart": was_autostart})
+        ok &= check("收尾：还原用户原来的 autoStart 偏好（%r）" % was_autostart,
+                    _get_status_value("autoStart") == was_autostart,
+                    "HTTP %r" % (status,))
+
+    # 5b. 再把门户恢复回"进门前是否在跑"
     if was_alive:
         status, back = call("/start", "POST", {"lanOnly": True}, timeout=180)
         time.sleep(2)

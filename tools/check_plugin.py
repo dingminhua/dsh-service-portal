@@ -25,11 +25,23 @@ ROOT = os.path.dirname(HERE)
 PLUGIN_DIR = os.environ.get(
     "SERVICE_PLUGIN_DIR",
     os.path.join(ROOT))
-# DSH 自带的 node（优先），其次 PATH 上的 node
+# DSH 自带的 node（优先），其次 PATH 上的 node。
+#
+# 这里原来只认 Windows 的 `%LOCALAPPDATA%\Programs\DeepSeek Harness\...\node.exe`：
+# 在 macOS/Linux 上 `LOCALAPPDATA` 为空 → 拼出 `Programs/DeepSeek Harness/...`
+# 这么个**相对路径**（永远不存在），且 `.exe` 后缀在别的平台也是错的。
+# 于是检验脚本在非 Windows 上直接 FileNotFoundError —— 看着像"功能坏了"，
+# 其实只是找 node 的方式写死了平台。现在按平台给候选，最后回落 PATH。
 DSH_NODE_CANDIDATES = [
     os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "DeepSeek Harness",
                  "resources", "runtime", "primary-runtime", "dependencies",
                  "node", "bin", "node.exe"),
+    os.path.join("/Applications", "DeepSeek Harness.app", "Contents", "Resources",
+                 "app.asar", "runtime", "primary-runtime", "dependencies",
+                 "node", "bin", "node"),
+    os.path.join(os.path.expanduser("~"), "Library", "Application Support",
+                 "DeepSeek Harness", "resources", "runtime", "primary-runtime",
+                 "dependencies", "node", "bin", "node"),
 ]
 
 SUITES = ("test/host.test.mjs", "test/client.test.mjs")

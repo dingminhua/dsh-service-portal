@@ -960,3 +960,408 @@ test("askPortalShutdown：门户不回话（卡住）→ 超时失败，仍给�
     server.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// 「下次打开 DSH 要不要自动起」跟随用户的启停动作
+//
+// 用户的原话：「我觉得默认就应该是启动的，用户关闭下次打开就还是关闭，
+// 用户启动下次打开就还是启动，默认是内网启动，外网关闭」。
+//
+// 这里要拦的是两类"不崩、只给错误答案"：
+//   · 动作没记住 → 用户明明停过，下次开机它又自己起来（用户会以为插件自作主张）；
+//   · 记住的时机不对 → 停**失败**（门户僵死、端口还占着）也记成"下次别起"，
+//     界面说已停止、真实进程还在跑，偏好却被改掉了。
+// ---------------------------------------------------------------------------
+
+/**
+ * 把宿主路由处理器挂到**真 HTTP server** 上打一次，返回 {status, json}。
+ *
+ * 为什么不直接调用 handler(req,res)：路由层本身就是被检验的对象（路径、方法、
+ * 状态码、JSON 形状都在这一层），用假 req/res 只能证明"函数能跑"，证明不了
+ * 真实请求打进去会怎样 —— 这与本文件开头那条"不能用跑通就算过"一致。
+ */
+async function callHandler(handler, method, route, body) {
+  const server = createHttpServer((req, res) => { handler(req, res); });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  const port = server.address().port;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/service-portal/api${route}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { /* 非 JSON 也算结果 */ }
+    return { status: res.status, json };
+  } finally {
+    await new Promise((done) => server.close(done));
+  }
+}
+
+/** 造一个"正在监听"的假门户：端口真的在听，/_api/shutdown 回 200 并松开端口。 */
+function fakeRunningPortal() {
+  return new Promise((resolvePortal) => {
+    const server = createHttpServer((req, res) => {
+      if (req.url && req.url.startsWith("/_api/shutdown")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        // 真门户收到 shutdown 会自己退出、端口随后松掉；这里照做，
+        // 否则 stopPublic 会走「兜底 --stop」那条路去 spawn 真进程。
+        setTimeout(() => server.close(), 10);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, kind: "portal", lan_urls: [], services: [] }));
+    });
+    server.listen(0, "127.0.0.1", () => {
+      resolvePortal({ server, port: server.address().port });
+    });
+  });
+}
+
+/** 造一个假的 configEditor，记录 editor.edit 收到的补丁。 */
+function fakeConfigEditor({ rows, throwOnEdit = false } = {}) {
+  const calls = [];
+  const entries = rows ?? [{ options: { name }, value: { repoPath: "", portalPort: 8899 } }];
+  return {
+    calls,
+    entries: () => entries,
+    async edit(entry, mutate) {
+      if (throwOnEdit) throw new Error("editor 炸了");
+      const next = mutate(structuredClone(entry.value ?? {}));
+      entry.value = next;
+      calls.push(next);
+      return next;
+    },
+  };
+}
+
+test("rememberAutoStart：只写本插件自己的条目，其余字段原样保留", async () => {
+  const editor = fakeConfigEditor();
+  const ctx = { get: () => editor, logger: { warn() {} } };
+  assert.equal(await _internals.rememberAutoStart(ctx, false), false);
+  assert.equal(editor.calls.length, 1);
+  assert.equal(editor.calls[0].autoStart, false);
+  assert.equal(editor.calls[0].repoPath, "", "不能顺手抹掉别的字段");
+  // 反着打：true 也要能写进去（不是只有 false 生效）
+  assert.equal(await _internals.rememberAutoStart(ctx, true), true);
+  assert.equal(editor.calls[1].autoStart, true);
+});
+
+test("rememberAutoStart：没有 configEditor 时不报错、返回 undefined", async () => {
+  // 老宿主/无配置环境的兜底：偏好记不住可以接受，但**绝不能**因此让启停失败。
+  const ctx = { get: () => undefined, logger: { warn() {} } };
+  assert.equal(await _internals.rememberAutoStart(ctx, false), undefined);
+});
+
+test("rememberAutoStart：editor 抛错时吞掉（best-effort），不冒泡", async () => {
+  const editor = fakeConfigEditor({ throwOnEdit: true });
+  const ctx = { get: () => editor, logger: { warn() {} } };
+  assert.equal(await _internals.rememberAutoStart(ctx, true), undefined,
+    "写偏好失败必须返回 undefined，而不是把异常抛给调用方");
+});
+
+test("rememberAutoStart：找不到本插件条目时不动别的插件", async () => {
+  const editor = fakeConfigEditor({
+    rows: [{ options: { name: "别的插件" }, value: { autoStart: true } }],
+  });
+  const ctx = { get: () => editor, logger: { warn() {} } };
+  assert.equal(await _internals.rememberAutoStart(ctx, false), undefined);
+  assert.equal(editor.calls.length, 0, "不能改到别的插件的条目");
+  assert.equal(editor.entries()[0].value.autoStart, true);
+});
+
+test("路由 POST /stop：门户自退成功 → 记下「下次不再自动启动」", async () => {
+  const { server, port } = await fakeRunningPortal();
+  const root = portalRepo({ portal_port: port, password: "pw", lan_urls: [], services: [] });
+  const editor = fakeConfigEditor();
+  const ctx = { get: () => editor, logger: { warn() {} } };
+  try {
+    const handler = _internals.createHandler(
+      () => ({ infraPath: root, repoPath: root, pythonPath: "", portalPort: port }), ctx);
+    const res = await callHandler(handler, "POST", "/stop");
+    assert.equal(res.status, 200, "门户已自退就该回 200");
+    assert.equal(editor.calls.length, 1, "停成功必须写一次偏好");
+    assert.equal(editor.calls[0].autoStart, false);
+  } finally {
+    try { server.close(); } catch { /* 已关 */ }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("路由 POST /stop：没停掉（端口上没人/失败）→ 偏好一动不动", async () => {
+  // 反例控制（必须与上一条产生**可区分**的结果）：停失败还写偏好，就会出现
+  // 「界面说已停止、下次开机它又自己起来」这种最难查的错位。
+  const port = await closedPort();
+  const root = portalRepo({ portal_port: port, password: "pw", lan_urls: [], services: [] });
+  const editor = fakeConfigEditor();
+  const ctx = { get: () => editor, logger: { warn() {} } };
+  try {
+    const handler = _internals.createHandler(
+      () => ({ infraPath: root, repoPath: root, pythonPath: "", portalPort: port }), ctx);
+    const res = await callHandler(handler, "POST", "/stop");
+    assert.notEqual(res.status, 200, "没停掉就不能回 200");
+    assert.equal(editor.calls.length, 0, "失败路径绝不能改偏好");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("路由 POST /start：启动成功（已在跑，幂等）→ 记下「下次自动启动」", async () => {
+  const { server, port } = await fakeRunningPortal();
+  const root = portalRepo({ portal_port: port, password: "pw", lan_urls: [], services: [] });
+  const editor = fakeConfigEditor();
+  const ctx = { get: () => editor, logger: { warn() {} } };
+  try {
+    const handler = _internals.createHandler(
+      () => ({ infraPath: root, repoPath: root, pythonPath: "", portalPort: port }), ctx);
+    // lanOnly=true：端口已在听 → startPublic 幂等返回 ok，不需要真起进程
+    const res = await callHandler(handler, "POST", "/start", { lanOnly: true });
+    assert.equal(res.status, 200);
+    assert.equal(editor.calls.length, 1);
+    assert.equal(editor.calls[0].autoStart, true);
+  } finally {
+    try { server.close(); } catch { /* 已关 */ }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 开公网的免责声明必须在**服务端**校验，不能只靠前端那个勾选框。
+// 为什么（对齐 dsh-pocket 的 issue #31）：前端勾选只解决"用户看见了"，
+// 防不住绕过前端直接打接口（脚本 / 旧缓存的前端 / 改过的客户端）。
+// 开公网 = 把一台能执行代码的机器暴露到互联网，这一道必须再挡一次。
+test("路由 POST /start：开公网未带 disclaimer → 400 拒绝，且不真的去启动", async () => {
+  const root = portalRepo({ portal_port: 8899, password: "pw", lan_urls: [], services: [] });
+  const editor = fakeConfigEditor();
+  const ctx = { get: () => editor, logger: { warn() {} } };
+  try {
+    const handler = _internals.createHandler(
+      () => ({ infraPath: root, repoPath: root, pythonPath: "", portalPort: 8899 }), ctx);
+    const res = await callHandler(handler, "POST", "/start", {});
+    assert.equal(res.status, 400, "没勾免责声明就开公网必须被拒");
+    assert.equal(res.json?.code, "disclaimer-required");
+    assert.equal(editor.calls.length, 0,
+      "被拒的请求绝不能改「下次自动启动」偏好");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("路由 POST /start：只内网启动不要求 disclaimer（不暴露公网，别为难它）", async () => {
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const at = src.indexOf('route === "/start"');
+  assert.ok(at > 0, "找不到 /start 路由");
+  const block = src.slice(at, at + 1200);
+  assert.match(block, /body\.lanOnly !== true && body\.disclaimer !== true/,
+    "免责声明的校验必须排除 lanOnly 这条路径");
+});
+
+test("只认启停动作：自动启动与建/收隧道都不碰该偏好", () => {
+  // 「这次是用户点的」与「这是我们自己顺手起的」必须分开 —— 否则自动启动会把
+  // 用户"停掉"的决定又改回来，形成"永远关不掉"的循环。
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const ensure = src.slice(src.indexOf("async function ensurePortal"));
+  const body = ensure.slice(0, ensure.indexOf("export function apply"));
+  assert.ok(!body.includes("rememberAutoStart"),
+    "ensurePortal（自动启动）不得改写用户的启停偏好");
+  for (const route of ["/tunnel/start", "/tunnel/stop"]) {
+    const at = src.indexOf(`route === "${route}"`);
+    assert.ok(at > 0, `找不到 ${route} 路由`);
+    const chunk = src.slice(at, at + 400);
+    assert.ok(!chunk.includes("rememberAutoStart"),
+      `${route} 只动隧道，不该改「下次是否自动启动」`);
+  }
+});
+
+test("readStatus：把「下次是否自动启动」透出给设置页", async () => {
+  // 设置页要靠它说清"你停过它，下次不会自己回来"，字段缺了那句话就没法显示。
+  const root = portalRepo({
+    portal_port: 8899, lan_urls: [], services: [], password: "pw",
+  });
+  try {
+    const on = await _internals.readStatus({ ...repoOf(root), autoStart: true });
+    assert.equal(on.autoStart, true);
+    const off = await _internals.readStatus({ ...repoOf(root), autoStart: false });
+    assert.equal(off.autoStart, false, "停过之后必须如实报 false");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cloudflared 探测：跨平台（回归 0.8.10 的 `开启公网访问失败`）", async () => {
+  // 真 bug：DEFAULT_CLOUDFLARED 写死 `.../bin/cloudflared.exe`。
+  // Windows 上对；macOS/Linux 上同目录里其实叫 `cloudflared`（无后缀），
+  // 于是 POST /_api/tunnel/start 恒回 502、公网功能整体哑掉 ——
+  // 而路径打印出来"看着是对的"（目录里确实有个 cloudflared），极难发现。
+  //
+  // 所以这里对**两个启动器**做源码级回归：解析逻辑必须按平台给文件名，
+  // 且必须留 PATH 回落，绝不能出现无条件写死 `.exe` 的那一行。
+  for (const rel of ["tools/portal_run.py", "tools/start_public_gui.py"]) {
+    const src = readFileSync(join(ROOT, rel), "utf8");
+    assert.ok(src.includes("def _resolve_cloudflared"),
+      `${rel} 必须用 _resolve_cloudflared() 探测，不能写死路径`);
+    assert.ok(src.includes("shutil.which(\"cloudflared\")"),
+      `${rel} 的探测必须回落到 PATH —— 用户自己装的 cloudflared 也要能用`);
+    assert.ok(src.includes("sys.platform"),
+      `${rel} 必须按平台决定可执行文件名`);
+    assert.ok(!/DEFAULT_CLOUDFLARED = os\.path\.join\([^)]*cloudflared\.exe/.test(src),
+      `${rel} 不得再无条件写死 cloudflared.exe（这正是本次 bug）`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 「随 DSH 开关」：宿主退出时必须把门户收掉，且**不能误杀别人的门户**。
+//
+// 用户要求：「这个服务本身就随 dsh 打开和关闭的，不需要再有设置」。
+// 门户是 spawnDetached 起的（故意脱离 DSH 子进程树，否则 DSH 一退手机就断），
+// 代价是 DSH 退出时它不会自己走 —— 所以必须由插件在 dispose/信号时接管收尾。
+// 这个收尾是「删掉停止门户按钮」的前提：没有它，用户就再没有正规入口去停了。
+// ---------------------------------------------------------------------------
+test("退出收尾：pid 不是我们起的 → 不代关（不误杀用户手动起的门户）", async () => {
+  // 用户在终端手动 `portal_run.py --lan-only` 调试时，那个门户不该被
+  // DSH 退出顺手杀掉。判据是状态文件里的 pid 与本插件记住的 pid 是否一致。
+  //
+  // 注意：必须让门户**看起来在运行**（端口真的在听），否则会先命中
+  // "已不在运行"那条更早的分支 —— 那样测的是另一件事，是空转。
+  // 直接 listen(0) 拿到一个**正被占用**的端口 —— 不要先探一个再重新绑：
+  // 探完就关掉的那个端口可能立刻被系统回收/复用，重新 bind 会失败或挂住。
+  // （原来的写法就死在这：listen 的回调签名是 (err)，我按"成功了"当无参回调，
+  //   结果那个 Promise 永远不 resolve，整个 test 进程挂到 30 秒超时。）
+  const probe = createServer();
+  const port = await new Promise((resolvePort, rejectPort) => {
+    probe.once("error", rejectPort);
+    probe.listen(0, "127.0.0.1", () => resolvePort(probe.address().port));
+  });
+  const root = portalRepo({
+    portal_port: port, portal_pid: 4242, lan_urls: [],
+    password: "pw", services: [],
+  });
+  try {
+    const result = await _internals.shutdownPortal(
+      { ...repoOf(root), portalPort: port }, 9999);
+    assert.equal(result.skipped, true, "pid 不匹配时必须跳过，不能代关");
+    assert.match(result.reason ?? "", /接管|不代关/,
+      "应当命中 pid 不匹配分支（若报「不在运行」，说明本检验空转了）");
+  } finally {
+    // close() 的回调会等**所有已建连接**结束。readPortalStatus 会朝这个端口
+    // 发一个 /_api/state 探测（就绪判据之一），而我们的 probe 只是个裸 TCP
+    // server、永不回包 —— 那条连接会一直挂着，close 的回调于是**永远不来**，
+    // 整个 test 进程挂到超时（我就在这上面挂了两轮）。
+    // 先手动掐掉所有活连接，再关；两个回调都加超时兜底。
+    try { probe.closeAllConnections?.(); } catch { /* 老版本 node */ }
+    await Promise.race([
+      new Promise((done) => probe.close(done)),
+      new Promise((done) => setTimeout(done, 3000)),
+    ]);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("退出收尾：没有本插件启动记录 → 不动（不猜着去杀）", async () => {
+  const root = portalRepo({
+    portal_port: 8899, portal_pid: 4242, lan_urls: [],
+    password: "pw", services: [],
+  });
+  try {
+    const result = await _internals.shutdownPortal(
+      { ...repoOf(root), portalPort: 8899 }, null);
+    assert.equal(result.skipped, true);
+    assert.equal(result.ok, true, "跳过不算失败，不能拖垮 DSH 退出流程");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("退出收尾：门户已不在运行 → 幂等跳过（退出时不会报错）", async () => {
+  // 关键是"端口上没人"。原来写死 8899 —— 而 8899 正是**开发机上真实门户的
+  // 默认端口**：只要用户的门户在跑（本插件默认 autoStart 就会让它跑着），
+  // 这条必定失败。它看起来像"偶发抖动"，其实是断言依赖了本机外部状态。
+  // 现在先借一个空闲端口再释放，得到一个"确定没人监听"的端口。
+  const { server, port } = await listenOnFreePort();
+  await new Promise((resolveClose) => server.close(resolveClose));
+
+  const root = portalRepo({
+    portal_port: port, portal_pid: 4242, lan_urls: [],
+    password: "pw", services: [],
+  });
+  try {
+    // 端口上没人 = 已停。此时收尾应当安静跳过，而不是抛异常。
+    const result = await _internals.shutdownPortal(
+      { ...repoOf(root), portalPort: port }, 4242);
+    assert.equal(result.skipped, true);
+    assert.match(result.reason ?? "", /不在运行/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("退出收尾：pid 匹配且端口在听 → 真的把门户停掉", async () => {
+  // 端到端：起一个真的门户进程（模拟本插件起的那个），记下它的 pid，
+  // 然后走 shutdownPortal —— 必须真的停掉，而不是"报成功但进程还在"。
+  const { spawn } = await import("node:child_process");
+  const port = await new Promise((resolvePort) => {
+    const s = createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const p = s.address().port;
+      s.close(() => resolvePort(p));
+    });
+  });
+  const root = portalRepo(null);
+  const script = join(ROOT, "tools", "portal_run.py");
+  if (!existsSync(script)) { rmSync(root, { recursive: true, force: true }); return; }
+  const child = spawn("python3", ["-X", "utf8", script,
+    "--port", String(port), "--password", "teardown-check-pw-1", "--lan-only"],
+    { cwd: root, detached: true, stdio: "ignore",
+      env: { ...process.env, PORTAL_RUNS_DIR: join(root, "runs") } });
+  try {
+    // 等门户真的起来（端口在听）
+    let up = false;
+    for (let i = 0; i < 60; i += 1) {
+      up = await _internals.portListening(port);
+      if (up) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!up) return; // 环境没 python：跳过（不假装通过）
+
+    const repo = { ...repoOf(root), portalPort: port };
+    const status = await _internals.readPortalStatus(root, "", port);
+    assert.equal(status.running, true);
+    assert.ok(status.portalPid, "状态里必须透出 portalPid（收尾靠它判归属）");
+
+    const result = await _internals.shutdownPortal(repo, status.portalPid);
+    assert.equal(result.ok, true, "pid 一致时必须真的停掉");
+    // 关键：进程要真的没了，不能只是"接口返回成功"
+    let still = true;
+    for (let i = 0; i < 40; i += 1) {
+      still = await _internals.portListening(port);
+      if (!still) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.equal(still, false, "收尾后端口仍在监听 —— 门户没真停掉");
+  } finally {
+    try { process.kill(-child.pid, "SIGKILL"); } catch { /* 已退 */ }
+    try { child.kill("SIGKILL"); } catch { /* 已退 */ }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("随 DSH 开关：apply() 把收尾挂到 dispose 与信号上（不是只定义没接）", () => {
+  // registerPortalTeardown 定义了收尾，但**定义了不等于接上了**。
+  // 这条检验盯的是接线本身：apply() 必须真的注册 ctx.on("dispose")，
+  // 并在进程信号上兜底（DSH 被 Ctrl+C 时 cordis 不一定来得及跑 dispose）。
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  assert.ok(src.includes('ctx.on?.("dispose"'),
+    "apply 必须把收尾挂到 ctx.on(\"dispose\")，否则卸载时门户不会被收掉");
+  assert.ok(src.includes("registerPortalTeardown"),
+    "apply 必须使用 registerPortalTeardown（收尾逻辑只有一份）");
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    assert.ok(src.includes(`"${sig}"`), `缺少 ${sig} 兜底：DSH 被中断时门户会变残留进程`);
+  }
+  // 收尾必须幂等：dispose 与信号可能都触发，不能收两遍/抛错
+  assert.ok(/let closed = false/.test(src) && /if \(closed\) return/.test(src),
+    "收尾必须幂等（closed 标志），否则重复退出会互相打架");
+  // 收尾要只针对"自己起的"门户，不能误杀用户手动起的调试进程
+  assert.ok(src.includes("Number(status.portalPid) !== Number(ownedPid)"),
+    "必须按 pid 判归属，否则会误杀用户手动起的门户");
+});

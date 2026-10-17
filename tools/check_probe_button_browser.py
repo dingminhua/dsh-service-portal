@@ -21,15 +21,19 @@ import subprocess
 import sys
 import tempfile
 import threading
+import sys
 import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-NODE = os.path.join(
-    os.environ.get("LOCALAPPDATA", ""), "Programs", "DeepSeek Harness",
-    "resources", "runtime", "primary-runtime", "dependencies", "node", "bin",
-    "node.exe")
+# node 的查找交给 check_plugin.find_node（含 macOS/Linux 候选 + PATH 回落）。
+# 原来这里写死 Windows 的 `%LOCALAPPDATA%\...\node.exe`：非 Windows 上必然
+# 拼出不存在的路径，脚本一起手就崩 —— 看着像功能坏了，其实是找 node 写死了平台。
+sys.path.insert(0, HERE)
+import check_plugin  # noqa: E402
+
+NODE = check_plugin.find_node()
 
 results = []
 

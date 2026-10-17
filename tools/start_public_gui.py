@@ -51,6 +51,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -68,8 +69,31 @@ LOG_DIR = os.path.join(RUNS_DIR, "public_gui_logs")
 CRED_FILE = os.path.join(RUNS_DIR, "public_gui_credentials.json")
 STATE_FILE = os.path.join(RUNS_DIR, "public_gui_state.json")
 
-DEFAULT_CLOUDFLARED = os.path.join(
-    os.path.expanduser("~"), ".dsh", "dsh-pocket", "bin", "cloudflared.exe")
+def _resolve_cloudflared():
+    """跨平台找 cloudflared（原来写死 .exe，macOS/Linux 上必然失败）。
+
+    与 portal_run.py 是同一个坑：Windows 上 `cloudflared.exe` 对，别的平台
+    同目录里其实叫 `cloudflared`（无后缀）。写死后缀 → 公网功能整体哑掉，
+    而路径打印出来"看着是对的"，极难发现。
+    """
+    home = os.path.expanduser("~")
+    names = ["cloudflared.exe", "cloudflared"] if sys.platform == "win32" \
+        else ["cloudflared", "cloudflared.exe"]
+    for base in (os.path.join(home, ".dsh", "dsh-pocket", "bin"),
+                 os.path.join(home, ".dsh", "bin"),
+                 os.path.join(home, ".local", "bin"),
+                 "/usr/local/bin", "/opt/homebrew/bin"):
+        for name in names:
+            candidate = os.path.join(base, name)
+            if os.path.isfile(candidate):
+                return candidate
+    found = shutil.which("cloudflared")
+    if found:
+        return found
+    return os.path.join(home, ".dsh", "dsh-pocket", "bin", names[0])
+
+
+DEFAULT_CLOUDFLARED = _resolve_cloudflared()
 # 拉起服务用的 python：**服务脚本在宿主仓库里**，所以解释器优先取宿主仓库的
 # .venv313（依赖装在那里）。本仓库只是门户/隧道基础设施，通常没有自己的 venv。
 # 迁移前这里写死 ROOT/.venv313 —— 当时基础设施与服务同仓所以成立；
@@ -358,7 +382,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         description="把配置台/查看台通过 cloudflared 公开到外网（随机域名 + 随机口令）")
     ap.add_argument("--cloudflared", default=DEFAULT_CLOUDFLARED,
-                    help="cloudflared.exe 路径（默认复用 dsh-pocket 自带的那份）")
+                    help="cloudflared 可执行文件路径（默认自动探测）")
     ap.add_argument("--python", default=DEFAULT_PYTHON,
                     help="拉起 GUI 用的 python（默认 .venv313）")
     ap.add_argument("--no-user", action="store_true",

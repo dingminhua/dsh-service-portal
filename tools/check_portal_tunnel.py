@@ -107,9 +107,15 @@ process.exit(0);
     os.makedirs(os.path.dirname(script_path), exist_ok=True)
     with open(script_path, "w", encoding="utf-8") as handle:
         handle.write(script)
-    node = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs",
-                        "DeepSeek Harness", "resources", "runtime",
-                        "primary-runtime", "dependencies", "node", "bin", "node.exe")
+    # 复用 check_plugin 的 node 查找（含 macOS/Linux 候选 + PATH 回落）。
+    # 原来这里写死 `%LOCALAPPDATA%\...\node.exe`：非 Windows 上 LOCALAPPDATA
+    # 为空 → 相对路径 → FileNotFoundError，检验直接崩。
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import check_plugin
+    node = check_plugin.find_node()
+    if not node:
+        print("跳过：找不到 node（DSH 运行时与 PATH 都没有）；不代表通过")
+        return 2
     try:
         proc = subprocess.run([node, script_path], cwd=ROOT, capture_output=True,
                               text=True, encoding="utf-8", errors="replace",

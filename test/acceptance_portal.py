@@ -87,22 +87,37 @@ def main():
     threading.Thread(target=app.serve_forever, daemon=True).start()
     app_port = app.server_address[1]
 
-    runs = os.path.join(ROOT, "runs")
-    state_file = os.path.join(runs, "portal_state.json")
-    reg_file = os.path.join(runs, "portal_registry.json")
-    backup = None
-    for path in (state_file, reg_file):
-        if os.path.exists(path):
-            backup = backup or tempfile.mkdtemp(prefix="portal-acc-backup-")
-            shutil.copy2(path, os.path.join(backup, os.path.basename(path)))
-            os.remove(path)
+    # ---------------------------------------------------------------
+    # 隔离：让门户把状态写进**临时目录**，绝不碰用户真实的 runs/。
+    #
+    # 这里原来是"备份真实文件 → 删掉 → 跑完还原"，看着稳妥，实际漏了：
+    #
+    #     backup = None
+    #     for path in (state_file, reg_file):
+    #         if os.path.exists(path):
+    #             backup = backup or tempfile.mkdtemp(...)   # ← 只在**第一个存在**的文件上建
+    #             ...
+    #
+    # 用户真实目录里往往 **只有 portal_state.json、还没有 portal_registry.json**
+    # （他还没添加过任何服务）。于是 backup 因 state 而建，注册表从未进备份。
+    # 收尾时 `if backup:` 成立 → 走还原分支 → **注册表既不还原也不删除**。
+    # 而脚本中途会往注册表里加一条测试服务 "s2"（见下面 ② 开头），
+    # 它就永久留在了用户的真实配置里，指向一个早已关闭的随机端口。
+    # 用户看到控制台凭空多出一个"服务二"，而他从没设置过。
+    #
+    # 根因不是"忘了删"，而是**测试直接改真实配置、只靠收尾兜底**。
+    # 正确做法是根本不写那个目录：门户/注册表路径都跟随 PORTAL_RUNS_DIR
+    # （tools/portal_run.py 已支持），跑在哪儿都影响不到真实数据。
+    # ---------------------------------------------------------------
+    runs = tempfile.mkdtemp(prefix="portal-acc-runs-")
+    env = dict(os.environ, PORTAL_RUNS_DIR=runs)
 
     log = open(os.path.join(tempfile.gettempdir(), "portal-acceptance.log"), "wb")
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8",
          os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(PORT), "--password", PASSWORD, "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, env=env)
 
     try:
         ready = False
@@ -196,7 +211,16 @@ def main():
 
         print("\n【③ 二维码 / 手机端 / 限速 / 健康检查】")
         _s, console_body, _ = call("/", LAN_HOST)
-        check("③a 控制台含二维码（内联 SVG）", b"data:image/svg+xml" in console_body)
+        # 门户页已按用户要求**不再渲染二维码与访问地址**（「图2整个都不需要显示」）：
+        # 进门户本来就是扫码/点链接来的，地址就在地址栏里。二维码/复制留在
+        # 插件设置页（那是发给别人用的场景）。所以这里断言的是"页面能正常渲染
+        # 节点区"，而不是"页面上有张码"。
+        check("③a 控制台正常渲染（含节点区与管理说明）",
+              "已发布的节点".encode() in console_body
+              and "怎么管理".encode() in console_body)
+        check("③b 控制台**不再**渲染二维码/地址卡（用户要求）",
+              b"data:image/svg+xml" not in console_body
+              and "访问地址".encode() not in console_body)
         check("③b 含 viewport（手机端）", b'name="viewport"' in console_body)
         check("③c 含响应式样式", b"@media" in console_body)
 
@@ -276,14 +300,9 @@ def main():
             app.shutdown()
         except Exception:
             pass
-        if backup:
-            for name in os.listdir(backup):
-                shutil.copy2(os.path.join(backup, name), os.path.join(runs, name))
-            shutil.rmtree(backup, ignore_errors=True)
-        else:
-            for path in (state_file, reg_file):
-                if os.path.exists(path):
-                    os.remove(path)
+        # 临时目录整个丢掉即可 —— 真实 runs/ 从头到尾没被碰过，
+        # 所以不再需要"备份/还原"那套（它正是漏掉 s2 的地方）。
+        shutil.rmtree(runs, ignore_errors=True)
 
     passed = sum(1 for ok, _, _ in RESULTS if ok)
     total = len(RESULTS)

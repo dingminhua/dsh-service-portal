@@ -8,6 +8,8 @@
 """
 import json
 import os
+import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -15,11 +17,31 @@ import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from portal_isolation import portal_env  # noqa: E402
 PORT = 9001
-NODE = os.path.join(
-    os.environ.get("LOCALAPPDATA", ""), "Programs", "DeepSeek Harness",
-    "resources", "runtime", "primary-runtime", "dependencies",
-    "node", "bin", "node.exe")
+def _find_node():
+    """跨平台找 node。原来写死 Windows 的 node.exe，在 macOS/Linux 上这条检验
+    必然 FileNotFoundError（假失败，还看不出是环境问题）。"""
+    # 1) 宿主自带运行时（优先：版本一定与 DSH 匹配）
+    candidates = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(os.path.join(
+            local, "Programs", "DeepSeek Harness", "resources", "runtime",
+            "primary-runtime", "dependencies", "node", "bin", "node.exe"))
+    candidates.append(os.path.join(
+        "/Applications/DeepSeek Harness.app/Contents/Resources", "runtime",
+        "primary-runtime", "dependencies", "node", "bin", "node"))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    # 2) PATH 上的 node
+    import shutil as _sh
+    return _sh.which("node") or "node"
+
+
+NODE = _find_node()
 
 
 def portal_alive():
@@ -32,12 +54,11 @@ def portal_alive():
 
 
 def main():
-    runs = os.path.join(ROOT, "runs")
+    # 状态目录隔离到临时目录（见 test/portal_isolation.py）。
+    # 这条尤其重要：本测试的**目的**就是"真的把门户起起来"，所以它原来必然
+    # 会覆盖用户正在用的 portal_state.json。
+    runs = tempfile.mkdtemp(prefix="portal-runs-")
     state_file = os.path.join(runs, "portal_state.json")
-    backup = None
-    if os.path.exists(state_file):
-        backup = state_file + ".autostart-check"
-        os.replace(state_file, backup)
 
     results = []
 
@@ -89,6 +110,7 @@ process.exit(0);
 
     try:
         proc = subprocess.run([NODE, script_path], cwd=ROOT, capture_output=True,
+                               env=portal_env(runs),
                               text=True, encoding="utf-8", errors="replace",
                               timeout=180)
         out = (proc.stdout or "").strip()
@@ -122,14 +144,13 @@ process.exit(0);
         try:
             subprocess.run([sys.executable, "-X", "utf8",
                             os.path.join(ROOT, "tools", "portal_run.py"), "--stop"],
-                           cwd=ROOT, capture_output=True, timeout=60)
+                           cwd=ROOT, env=portal_env(runs),
+                           capture_output=True, timeout=60)
         except Exception:
             pass
-        for path in (script_path, state_file, state_file + ".tmp"):
-            if os.path.exists(path):
-                os.remove(path)
-        if backup and os.path.exists(backup):
-            os.replace(backup, state_file)
+        if os.path.exists(script_path):
+            os.remove(script_path)
+        shutil.rmtree(runs, ignore_errors=True)   # 临时目录整棵删除
 
     passed = sum(1 for ok, _, _ in results if ok)
     print("\n自动启动验证：%d/%d" % (passed, len(results)))

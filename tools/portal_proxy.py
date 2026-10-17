@@ -42,6 +42,7 @@ from portal_login import (
     LOGIN_PATH,
     LOGOUT_PATH,
     clear_cookie_header,
+    lan_disabled_html,
     login_page_html,
     make_session,
     password_matches,
@@ -207,14 +208,39 @@ def is_lan_override_host(host_header, override):
     return name == want
 
 
+def lan_blocked(kind, lan_enabled_provider=None):
+    """这个来源是否被「局域网访问总开关」**直接拒绝**（而不是降级成要口令）。
+
+    为什么是拒绝而不是降级（对齐 dsh-pocket 的 issue #54 做法）：
+    早先关掉开关只是让内网请求「按公网对待」—— 于是用户看到的是一个**登录页**，
+    而不是「已关闭」。三处后果：
+      · 界面上写「手机扫码 / 链接均不可用」，实际却是「输对口令还能进」，
+        文案与实现不一致，且用户永远不知道该输哪个口令；
+      · 用户关它的意图是「不想让同一 WiFi 的人看到我的控制台」，降级并没有
+        满足这个意图，只是加了一道他可能并不知道口令的墙；
+      · 无法区分「内网被别人连上」和「内网被自己关掉」这两种完全不同的状况。
+
+    所以这里改成硬拒绝：返回 True 就回 403，不走认证、不给登录页。
+    loopback（本机 / cloudflared 回连）**永不**被这条拦住 —— 否则用户在电脑上
+    连自己的门户都进不去，公网也会被一起掐死。
+    """
+    if kind != "lan":
+        return False
+    return not lan_access_enabled(lan_enabled_provider)
+
+
 def needs_auth(kind, open_classes=("loopback", "lan"),
                open_classes_provider=None, lan_enabled_provider=None):
     """该来源是否需要口令（认证层的唯一判定入口，纯函数便于控制检验直接测）。
 
     kind: classify_host() 的分类结果（loopback / lan / public）
+
+    注意：内网被总开关关掉时，请求在 `lan_blocked()` 那一步就拿 403 走了，
+    根本到不了这里。这里的 lan_enabled 判断保留为**纵深防御**：万一将来有人
+    新增一条绕过 403 的路径，至少还会退回到「要口令」，而不是静默放行。
     """
     # 局域网总开关关掉时，内网按公网对待（同样要口令）。
-    if kind == "lan" and not lan_access_enabled(lan_enabled_provider):
+    if lan_blocked(kind, lan_enabled_provider):
         return True
     return kind not in resolve_open_classes(open_classes, open_classes_provider)
 
@@ -458,6 +484,29 @@ class PortalHandler(BaseHTTPRequestHandler):
     def _send_json(self, status, payload):
         self._send(status, json.dumps(payload, ensure_ascii=False, indent=2),
                    content_type="application/json; charset=utf-8")
+
+    def _lan_disabled(self):
+        """局域网访问被关掉：HTML 请求给说明页，其它请求给机器可读的 JSON。
+
+        判断顺序（不能只看 Accept）：
+          1. `/_api/*` 一律给 JSON —— 那是程序调用；给它 HTML 只会让调用方
+             解析失败，然后把"已关闭"误当成"网络故障"去重试；
+          2. Accept 含 text/html -> 说明页（手机浏览器要看到**人话**）；
+          3. 其余一律 JSON —— 包括**根本不发 Accept** 的 urllib / curl / 脚本。
+             原先「没有 Accept 就按 HTML」是错的：最可能不带 Accept 的恰恰是程序。
+        """
+        path = self.path.split("?", 1)[0]
+        accept = (self.headers.get("Accept") or "").lower()
+        wants_html = ("text/html" in accept) and not path.startswith(API_PREFIX)
+        if wants_html:
+            return self._send(403, lan_disabled_html(),
+                              extra_headers=(("X-Portal-Lan", "disabled"),))
+        return self._send(403, json.dumps(
+            {"error": "lan-disabled",
+             "detail": "局域网访问已关闭：请在电脑上打开「局域网访问」开关"},
+            ensure_ascii=False),
+            content_type="application/json; charset=utf-8",
+            extra_headers=(("X-Portal-Lan", "disabled"),))
 
     def _redirect(self, location, extra_headers=()):
         self.send_response(303)
@@ -713,7 +762,13 @@ class PortalHandler(BaseHTTPRequestHandler):
 
         kind = self._request_class()
 
-        # 3) 认证先于一切转发：公网必须持有有效会话
+        # 3) 局域网总开关关掉 -> **直接 403**，不给登录页、不转发任何东西。
+        #    必须排在认证之前：否则用户看到的是登录页，误以为口令错了。
+        #    WebSocket 在 _tunnel_websocket 里另有一道同样的判定（见那里）。
+        if lan_blocked(kind, type(self).lan_enabled_provider):
+            return self._lan_disabled()
+
+        # 3b) 认证先于一切转发：公网必须持有有效会话
         if self._needs_auth(kind) and not self._authorized():
             return self._login_page()
 

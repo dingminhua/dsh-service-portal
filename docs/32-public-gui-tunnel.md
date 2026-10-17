@@ -111,7 +111,7 @@ Get-Content runs\public_gui_credentials.json -Raw -Encoding UTF8 | ConvertFrom-J
 **在那个既有域名上不行，有两个硬障碍：**
 
 1. **dsh-pocket 用的是 cloudflared quick tunnel，是「单目标整站转发」。**
-   实测其命令行就是 `cloudflared.exe --no-autoupdate tunnel --url http://127.0.0.1:3081 --protocol http2`
+   实测其命令行就是 `cloudflared --no-autoupdate tunnel --url http://127.0.0.1:3081 --protocol http2`
    —— 转发目标写死一个端口，**没有按路径分流的能力**。而且它由插件管理，
    我们**不该也不能**改它（用户正通过它与 AI 对话，动它等于断线）。
 2. **两个 GUI 的页面原本全部用绝对路径引用资源与 API**（`/api/...`、`/vendor/...`、
@@ -217,7 +217,7 @@ https://<随机>.trycloudflare.com/         -> 落地页（列出入口，需口
 | 查看台 | 8811 | 手动 / 本脚本 | `gui/viewer_server.py --port 8811` |
 | 认证代理（默认） | 8890 / 8891 | 本脚本 | 每站一个，只绑 127.0.0.1 |
 | 认证代理（单域名） | 8899 | 本脚本 | 一个代理内含多个挂载点 |
-| 隧道 | — | 本脚本 | 复用 dsh-pocket 自带的 `cloudflared.exe` |
+| 隧道 | — | 本脚本 | 复用 dsh-pocket 自带的 `cloudflared`（自动探测，跨平台） |
 
 **边界（不得混为一谈）**：
 

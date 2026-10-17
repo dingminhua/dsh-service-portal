@@ -8,14 +8,18 @@
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "test"))
+from portal_isolation import portal_env  # noqa: E402
 PORT = 8999
 
 
@@ -31,24 +35,23 @@ def portal_call(path, method="GET", data=None, ctype=None):
             return res.status, res.read()
     except urllib.error.HTTPError as err:
         return err.code, err.read()
+    except urllib.error.URLError:
+        # 就绪轮询期间端口还没人听是正常现象，不能炸掉整份检验
+        return 0, b""
 
 
 def main():
-    runs = os.path.join(ROOT, "runs")
+    # 状态目录隔离到临时目录（见 test/portal_isolation.py）
+    runs = tempfile.mkdtemp(prefix="portal-runs-")
     state_file = os.path.join(runs, "portal_state.json")
     reg_file = os.path.join(runs, "portal_registry.json")
-    backup = {}
-    for path in (state_file, reg_file):
-        if os.path.exists(path):
-            backup[path] = path + ".setpage-check"
-            os.replace(path, backup[path])
 
     log = open(os.path.join(runs, "setpage-check.log"), "wb")
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8",
          os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(PORT), "--password", "setpage-check-password-1", "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, env=portal_env(runs), stdout=log, stderr=subprocess.STDOUT)
 
     results = []
 
@@ -123,9 +126,7 @@ def main():
         for path in (state_file, state_file + ".tmp", reg_file):
             if os.path.exists(path):
                 os.remove(path)
-        for original, saved in backup.items():
-            if os.path.exists(saved):
-                os.replace(saved, original)
+        shutil.rmtree(runs, ignore_errors=True)   # 临时目录整棵删除
 
     passed = sum(1 for ok, _, _ in results if ok)
     print("\n设置页数据链验证：%d/%d" % (passed, len(results)))

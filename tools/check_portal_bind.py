@@ -22,11 +22,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 
+def _make_exclusive(probe):
+    """尽量让 probe 独占端口后绑定 —— **跨平台**。
+
+    `SO_EXCLUSIVEADDRUSE` 只有 Windows 有。原来三处都直接引用它，在 macOS/Linux
+    上会 AttributeError 把整个检验崩掉（看着像门户坏了，其实只是检验脚本写死了
+    Windows）。非 Windows 上不设这个选项即可：门户侧也没有设 SO_REUSEADDR，
+    所以第二个 bind 到同一端口依然会被系统拒绝，检验语义不变。
+    """
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    if exclusive is not None:
+        probe.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+    return probe
+
+
 def port_free(port):
-    """这个端口现在能不能独占绑上（SO_EXCLUSIVEADDRUSE，和门户同口径）。"""
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    """这个端口现在能不能独占绑上（与门户同口径）。"""
+    probe = _make_exclusive(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
     try:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         probe.bind(("0.0.0.0", port))
         return True
     except OSError:
@@ -49,20 +62,43 @@ def pick_base_pair():
 
 
 def listening_addrs(port):
-    """netstat 里该端口的监听地址集合。"""
+    """该端口的监听地址集合（**跨平台**）。
+
+    原来只认 Windows 的 `netstat -ano -p TCP`：它用 `LISTENING` 标记监听行。
+    macOS/Linux 的 netstat 用 `LISTEN`，且没有 `-p TCP` 这套参数 —— 于是
+    在非 Windows 上这里**永远返回空集**，紧接着那条
+    「监听 0.0.0.0（不是只绑 127.0.0.1）」断言必然 FAIL。
+    那不是门户只绑了 127.0.0.1，而是检验脚本量不出来（同一条检验里
+    「从内网 IP 能访问」是通过的 —— 真只绑 127.0.0.1 的话它不可能通过）。
+
+    现在按平台选命令：Windows 沿用 netstat；其余用 `lsof -nP -iTCP:<port> -sTCP:LISTEN`。
+    """
+    out = set()
+    if os.name == "nt":
+        try:
+            raw = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                                 capture_output=True, timeout=20).stdout or b""
+        except Exception:
+            return out
+        for line in raw.decode("utf-8", "replace").splitlines():
+            if "LISTENING" not in line or (":%d " % port) not in line:
+                continue
+            for part in line.split():
+                if part.endswith(":%d" % port):
+                    out.add(part.rsplit(":", 1)[0])
+        return out
+    # POSIX：lsof 的 NAME 形如 `*:8899 (LISTEN)` / `127.0.0.1:8899 (LISTEN)`
     try:
-        raw = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+        raw = subprocess.run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"],
                              capture_output=True, timeout=20).stdout or b""
     except Exception:
-        return set()
-    out = set()
+        return out
     for line in raw.decode("utf-8", "replace").splitlines():
-        if "LISTENING" not in line or (":%d " % port) not in line:
-            continue
-        parts = line.split()
-        for part in parts:
+        for part in line.split():
             if part.endswith(":%d" % port):
-                out.add(part.rsplit(":", 1)[0])
+                host = part.rsplit(":", 1)[0]
+                # lsof 用 `*` 表示"所有地址"（等价于 0.0.0.0）
+                out.add("0.0.0.0" if host in ("*", "[::]") else host)
     return out
 
 
@@ -102,13 +138,12 @@ def main():
         port = srv.server_address[1]
         check("默认监听 0.0.0.0（手机能连上）", host == "0.0.0.0",
               "实际 %r" % host)
-        # 独占：另一个进程再绑同一端口必须失败
-        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # 独占：另一个进程再绑同一端口必须失败（跨平台，见 _make_exclusive）。
+        probe = _make_exclusive(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
         try:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             probe.bind(("0.0.0.0", port))
             check("同一端口不能被重复绑定（独占生效）", False,
-                  "竟然绑上了 —— Windows 上会变成流量随机分流")
+                  "竟然绑上了 —— 流量会被随机分流到两个进程")
         except OSError:
             check("同一端口不能被重复绑定（独占生效）", True)
         finally:
@@ -127,8 +162,7 @@ def main():
     if base is None:
         print("找不到两个连续空闲端口，跳过真实进程部分")
         return 1
-    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    blocker = _make_exclusive(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
     blocker.bind(("0.0.0.0", base))
     blocker.listen(1)
 

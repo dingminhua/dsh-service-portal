@@ -17,6 +17,8 @@
 import json
 import os
 import re
+import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -25,6 +27,8 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "test"))
+from portal_isolation import portal_env  # noqa: E402
 PORT = 9155
 PUBLIC_PW = "public-password-123456"
 results = []
@@ -58,26 +62,29 @@ def post_json(path, payload, host=None):
 
 
 def main():
-    runs = os.path.join(ROOT, "runs")
+    # 状态目录隔离到临时目录（见 test/portal_isolation.py）：
+    # 原来是把用户真实的 portal_state.json / portal_registry.json 移走再移回，
+    # 中途异常退出会把用户状态留在半残态（有口令、有他加的节点）。
+    runs = tempfile.mkdtemp(prefix="portal-runs-")
     state = os.path.join(runs, "portal_state.json")
     reg = os.path.join(runs, "portal_registry.json")
-    backups = {}
-    for path in (state, reg):
-        if os.path.exists(path):
-            backups[path] = path + ".lanpin-check"
-            os.replace(path, backups[path])
-
     log = open(os.path.join(runs, "lanpin-check.log"), "wb")
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8", os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(PORT), "--password", PUBLIC_PW, "--lan-auth", "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, env=portal_env(runs), stdout=log, stderr=subprocess.STDOUT)
     try:
         ready = False
         for _ in range(60):
-            if call("/_auth/health")[0] == 200:
-                ready = True
-                break
+            # 就绪轮询要**容忍"端口还没人听"**：call() 不吞 URLError，
+            # 早期几次探测抛出去，整份检验就变成一条 URLError 堆栈，
+            # 看起来像产品挂了，其实只是门户还没起来（假失败）。
+            try:
+                if call("/_auth/health")[0] == 200:
+                    ready = True
+                    break
+            except urllib.error.URLError:
+                pass
             time.sleep(0.5)
         check("门户就绪", ready)
         if not ready:
@@ -210,12 +217,7 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
         log.close()
-        for path in (state, state + ".tmp", reg):
-            if os.path.exists(path):
-                os.remove(path)
-        for original, saved_path in backups.items():
-            if os.path.exists(saved_path):
-                os.replace(saved_path, original)
+        shutil.rmtree(runs, ignore_errors=True)   # 临时目录整棵删除，无需还原
 
     passed = sum(1 for ok in results if ok)
     print("\n局域网口令与手动选地址控制检验：%d/%d" % (passed, len(results)))

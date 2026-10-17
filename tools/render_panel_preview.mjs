@@ -58,12 +58,104 @@ const STATES = {
     lanCandidates: ["192.168.71.10", "10.198.75.60"], lanEnabled: true,
     lanAuthEnabled: false, lanPassword: "", publicUrl: null, problem: null,
     stoppedClean: true, codeStamp: "0.7.5",
+    // 用户主动停过：下次打开 DSH 不该自动起（设置页据此显示那句提示）
+    autoStart: false,
+    // 点「启动」后 /start 返回的就是这份对象（假 fetch 一律回状态），
+    // 所以这里塞一段 stdout 就能把「启动器输出」那一块也画出来。
+    stdout: "[portal] 端口 8899 已在听\n[portal] 局域网地址 http://192.168.71.10:8899\n[portal] 已写入 runs/portal_state.json\n",
+    exitCode: 0,
+  },
+  // 有节点：三种真实形态各一条（开放且上游在 / 开放但上游死 / 已屏蔽）。
+  services: {
+    ok: true, kind: "portal", running: true, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: ["http://192.168.71.10:8899"],
+    lanPassword: "57457404", lanPinCustom: false, lanAuthEnabled: true,
+    lanEnabled: true, lanCandidates: ["192.168.71.10", "10.198.75.60"],
+    startedAt: "2026-10-16 02:53:03", password: "5cqmIVOWr7T3j1Nz",
+    passwordMode: "random", publicUrl: null, problem: null, stoppedClean: false,
+    services: [
+      { key: "rltrain", name: "训练配置台", mount: "/rltrain",
+        target: "127.0.0.1:8810", note: "本机 RL 训练面板", enabled: true, alive: true },
+      { key: "grafana", name: "监控看板", mount: "/grafana",
+        target: "127.0.0.1:3000", note: "", enabled: true, alive: false },
+      { key: "files", name: "文件浏览", mount: "/files",
+        target: "127.0.0.1:8081", note: "临时给同事拷东西", enabled: false, alive: null },
+    ],
+  },
+  // 局域网访问被关掉：二维码位置显示"已关闭"（不能显示一张扫了打不开的码）。
+  lanoff: {
+    ok: true, kind: "portal", running: true, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: ["http://192.168.71.10:8899"],
+    lanPassword: "57457404", lanPinCustom: false, lanAuthEnabled: true,
+    lanEnabled: false, lanCandidates: ["192.168.71.10", "10.198.75.60"],
+    startedAt: "2026-10-16 02:53:03", password: "5cqmIVOWr7T3j1Nz",
+    passwordMode: "random", publicUrl: null, problem: null, stoppedClean: false,
+  },
+  // 内网也没开、公网也没开，且**有节点** —— 用户明确要的这个状态：
+  // 两个访问按钮都应该是灰的（各自判断自己的开关），节点卡仍完整可见。
+  svcnone: {
+    ok: true, kind: "portal", running: true, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: ["http://192.168.71.10:8899"],
+    lanPassword: "57457404", lanPinCustom: false, lanAuthEnabled: true,
+    lanEnabled: false, lanCandidates: ["192.168.71.10", "10.198.75.60"],
+    startedAt: "2026-10-16 02:53:03", password: "5cqmIVOWr7T3j1Nz",
+    passwordMode: "random", publicUrl: null, problem: null, stoppedClean: false,
+    services: [
+      { key: "rltrain", name: "RL 训练台", mount: "/rltrain",
+        target: "127.0.0.1:8800", note: "", enabled: true, alive: false },
+    ],
+  },
+  // 公网已开 + 有节点：用来看"内网访问 / 公网访问"两个按钮同时可点的形态，
+  // 以及关掉公网后后者变灰的对比（节点卡的启用/禁用只能这样并排核）。
+  svcboth: {
+    ok: true, kind: "portal", running: true, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: ["http://192.168.71.10:8899"],
+    lanPassword: "57457404", lanPinCustom: false, lanAuthEnabled: true,
+    lanEnabled: true, lanCandidates: ["192.168.71.10", "10.198.75.60"],
+    startedAt: "2026-10-16 02:53:03", password: "5cqmIVOWr7T3j1Nz",
+    passwordMode: "random", problem: null, stoppedClean: false,
+    publicUrl: "https://warm-dawn-1234.trycloudflare.com",
+    services: [
+      { key: "rltrain", name: "训练配置台", mount: "/rltrain",
+        target: "127.0.0.1:8810", note: "本机 RL 训练面板", enabled: true, alive: true },
+      { key: "grafana", name: "监控看板", mount: "/grafana",
+        target: "127.0.0.1:3000", note: "", enabled: true, alive: false },
+    ],
+  },
+  // 局域网关 + 公网开：验证「内网访问」灰、「公网访问」仍可点（两条通道独立）
+  svclanoff: {
+    ok: true, kind: "portal", running: true, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: ["http://192.168.71.10:8899"],
+    lanPassword: "57457404", lanPinCustom: false, lanAuthEnabled: true,
+    lanEnabled: false, lanCandidates: ["192.168.71.10", "10.198.75.60"],
+    startedAt: "2026-10-16 02:53:03", password: "5cqmIVOWr7T3j1Nz",
+    passwordMode: "random", problem: null, stoppedClean: false,
+    publicUrl: "https://warm-dawn-1234.trycloudflare.com",
+    services: [
+      { key: "rltrain", name: "训练配置台", mount: "/rltrain",
+        target: "127.0.0.1:8810", note: "", enabled: true, alive: true },
+    ],
+  },
+  // 异常退出：凭据还在、端口没人听 —— 这条分支以前只能靠真机复现。
+  problem: {
+    ok: true, kind: "portal", running: false, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: ["http://192.168.71.10:8899"],
+    lanCandidates: ["192.168.71.10"], lanEnabled: true, lanAuthEnabled: false,
+    lanPassword: "", publicUrl: null, stoppedClean: false, codeStamp: "0.8.9",
+    problem: "凭据文件还在，但 8899 端口没有进程在听（上次可能是被强杀或崩溃）。",
+    autoStart: true,
   },
 };
 
 const QR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21" width="164" height="164" shape-rendering="crispEdges"><rect width="21" height="21" fill="#fff"/><g fill="#111"><rect x="0" y="0" width="7" height="7"/><rect x="14" y="0" width="7" height="7"/><rect x="0" y="14" width="7" height="7"/><rect x="2" y="2" width="3" height="3" fill="#fff"/><rect x="16" y="2" width="3" height="3" fill="#fff"/><rect x="2" y="16" width="3" height="3" fill="#fff"/><rect x="9" y="9" width="3" height="3"/><rect x="13" y="9" width="2" height="2"/><rect x="9" y="13" width="2" height="2"/><rect x="16" y="16" width="3" height="3"/></g></svg>';
 
-function page(stateKey, dark) {
+function page(stateKey, dark, view, click) {
   const state = STATES[stateKey] || STATES.running;
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>panel-${stateKey}${dark ? "-dark" : ""}</title><style>
@@ -82,6 +174,8 @@ function page(stateKey, dark) {
 </style></head><body><div id="root"></div>
 <script>
 const STATE = ${JSON.stringify(state)};
+const VIEW = ${JSON.stringify(view)};
+const CLICK = ${JSON.stringify(click || "")};
 const QR_SVG = ${JSON.stringify(QR_SVG)};
 const fakeJson = (obj) => Promise.resolve({
   ok:true, status:200, text: async () => JSON.stringify(obj),
@@ -183,7 +277,8 @@ function styleValue(prop, val) {
     const inst = {
       hooks: {}, effects: {}, refs: {}, cursor: 0, pending: false, draw() {
         root.innerHTML = "";
-        root.appendChild(render(React.createElement(Comp, {}), this));
+        root.appendChild(render(
+          React.createElement(Comp, VIEW ? { view: VIEW } : {}), this));
       }, schedule() {
         if (this.pending) return;
         this.pending = true;
@@ -194,6 +289,16 @@ function styleValue(prop, val) {
     inst.draw();
     await new Promise((r) => setTimeout(r, 50));
     inst.draw();
+    // click=<selector>：点一下再画一次（确认框是 setState 之后才出现的）
+    if (CLICK) {
+      const target = document.querySelector(CLICK);
+      if (target) {
+        target.click();
+        await new Promise((r) => setTimeout(r, 50));
+      } else {
+        document.title = "CLICK_MISS::" + CLICK;
+      }
+    }
     // 调试：把关键元素的**实测盒子**写到 title 里，用来判断"看起来重叠"
     // 到底是真重叠还是只是行距紧（截图靠肉眼判断会误判）。
     if (new URLSearchParams(location.search).get("debug") === "1") {
@@ -223,11 +328,21 @@ createServer((req, res) => {
   const u = new URL(req.url, "http://127.0.0.1");
   const s = u.searchParams.get("s") || "running";
   const dark = u.searchParams.get("dark") === "1";
+  // view=summary：插件列表行/折叠态用的一行摘要。它也是产品的一部分，
+  // 因此和面板一样要能单独看（不传 view 就是完整面板）。
+  const view = u.searchParams.get("view") || "";
+  // click=<selector>：渲染完成后点一下再截图。
+  // 确认框是**组件局部状态**（setState 之后才出现），不在 status 里，
+  // 所以没法用 s= 造出来 —— 只能真的点。用它来核对话框的形态与文案。
+  const click = u.searchParams.get("click") || "";
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(page(s, dark));
+  res.end(page(s, dark, view, click));
 }).listen(0, "127.0.0.1", function () {
   const p = this.address().port;
   console.log(`http://127.0.0.1:${p}/?s=running`);
   console.log(`http://127.0.0.1:${p}/?s=public`);
   console.log(`http://127.0.0.1:${p}/?s=off`);
+  console.log(`http://127.0.0.1:${p}/?s=services`);
+  console.log(`http://127.0.0.1:${p}/?s=problem`);
+  console.log(`http://127.0.0.1:${p}/?s=lanoff`);
 });

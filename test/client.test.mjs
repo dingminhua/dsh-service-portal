@@ -527,3 +527,185 @@ test("两种包名拼写都注册（裸名 + include: 前缀）", () => {
 function statMs(path) {
   return statSync(path).mtimeMs;
 }
+
+// ---------------------------------------------------------------------------
+// 设计系统契约：面板的几何/令牌必须落在**宿主真实原语**的尺度里。
+//
+// 为什么需要这一组：这一批"难看"的根因全部是**无法从源码看出来的值** ——
+// 0.5px 在 DPR=1 下被浏览器向上取整成 1px（写 0.5 从来没生效过）、
+// 按钮 32px 高而宿主只有 36/28 两档、12.5px/11px 字号低于本文件自己定的下限。
+// 这些都不是"跑挂了"，而是"看着不像一家"——没有断言就会一改再改、反复回潮。
+//
+// 期望值来自 app.asar 里宿主的真实文件（照抄，不是估计）：
+//   dsh-client-ui-primitives/lib/Button.module.css   H36(常规)/H28(.sm)
+//   dsh-client-ui-primitives/lib/Input.module.css    H32
+//   dsh-client-ui-primitives/lib/Switch.module.css   36x20
+// ---------------------------------------------------------------------------
+
+// 剥掉 CSS 注释再检查：注释里会**引用**这条教训（"0.5px 会被抹成 1px"），
+// 那是文档，不是声明。测试要看的只有声明。
+const cssDecls = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "");
+
+test("设计契约：不用 0.5px 描边（DPR=1 下会被抹成 1px，写它等于自欺）", () => {
+  const css = cssDecls(bundle);
+  // 允许出现在注释里解释这条教训，但**声明**里不能有 0.5px
+  const decls = css.match(/(border|border-top|border-bottom|border-left|border-right|outline)[^;{}]*0\.5px/g) || [];
+  assert.deepEqual(decls, [],
+    "出现 0.5px 描边声明；实测在 DPR=1 下渲染成 1px，与宿主尺度不一致。实际=" + JSON.stringify(decls));
+});
+
+test("设计契约：按钮只用宿主的 36 / 28 两档高度", () => {
+  // .dsp-btn 默认档 = 宿主 .button.md（36），.dsp-btn-sm = 宿主 .sm（28）
+  const css = cssDecls(bundle);
+  const m = css.match(/\.dsp-btn,\.dsp-btn-primary,\.dsp-btn-ghost,\.dsp-btn-danger\{[^}]*height:(\d+)px/);
+  assert.ok(m, "找不到 .dsp-btn 的高度声明（选择器被改过？）");
+  assert.equal(m[1], "36", "默认按钮高度必须是宿主的 36 档；实际=" + m[1]);
+  const sm = css.match(/\.dsp-btn-sm\{[^}]*height:(\d+)px/);
+  assert.ok(sm, "找不到 .dsp-btn-sm 的高度声明");
+  assert.equal(sm[1], "28", "紧凑按钮高度必须是宿主的 28 档；实际=" + sm[1]);
+});
+
+test("设计契约：默认按钮不描边（宿主的 .button 是 border:none，靠底色分级）", () => {
+  const css = cssDecls(bundle);
+  const m = css.match(/\.dsp-btn,\.dsp-btn-primary,\.dsp-btn-ghost,\.dsp-btn-danger\{([^}]*)\}/);
+  assert.ok(m, "找不到 .dsp-btn 基础规则");
+  assert.ok(/\bborder:none\b/.test(m[1]),
+    "默认按钮必须 border:none —— 宿主只有 .outline 变体带描边；"
+    + "给所有按钮套框是『不像一套』最大的来源。实际规则=" + m[1]);
+});
+
+// CARD_CSS 是一段**模板字符串**，里面用 ${TYPE.caption} 这类插值引用字号刻度。
+// 在产物里它们仍是字面量（构建不展开），运行期才由 JS 求出 —— 所以测试要
+// **照运行期的方式**把令牌换成数字，否则正则一个字号都扫不到，
+// 断言会在"什么都没检查"的情况下通过（这个假绿灯实际发生过一次）。
+function resolveTypeTokens(css, sizeSource) {
+  const typeBlock = sizeSource.match(/const TYPE\s*=\s*\{([^}]*)\}/);
+  if (!typeBlock) throw new Error("源码里找不到 TYPE 字号刻度常量");
+  const table = {};
+  for (const m of typeBlock[1].matchAll(/(\w+)\s*:\s*(\d+)/g)) table[m[1]] = m[2];
+  return css.replace(/\$\{TYPE\.(\w+)\}/g, (all, key) => {
+    if (!(key in table)) throw new Error("CARD_CSS 引用了 TYPE 里没有的刻度: " + key);
+    return table[key];
+  });
+}
+
+test("设计契约：字号只能取 TYPE 四档，且不低于 12px", () => {
+  // 先确认插值真的被解析了 —— 否则下面就是在扫描空集合（假绿灯）
+  const css = resolveTypeTokens(cssDecls(bundle), source);
+  assert.ok(!/\$\{TYPE\./.test(css),
+    "仍有未解析的 ${TYPE.*} 插值，说明刻度替换没生效，本测试会变成空断言");
+  const sizes = new Set();
+  for (const m of css.matchAll(/font-size:([0-9.]+)px/g)) sizes.add(parseFloat(m[1]));
+  assert.ok(sizes.size >= 4,
+    "扫到的字号种类过少（" + sizes.size + "），测试可能没真正覆盖到 CARD_CSS");
+  // 面板里的字号声明只允许 12 / 13 / 14 / 16（TYPE 刻度）
+  const allowed = new Set([12, 13, 14, 16]);
+  const bad = [...sizes].filter((s) => !allowed.has(s));
+  assert.deepEqual(bad, [],
+    "出现 TYPE 刻度之外的字号（会出现『字大大小小』且无层级）；实际超纲值=" + JSON.stringify(bad));
+  // 12 是下限：低于 12px 在 2 倍缩放下会糊
+  const tooSmall = [...sizes].filter((s) => s < 12);
+  assert.deepEqual(tooSmall, [], "字号低于 12px 下限；实际=" + JSON.stringify(tooSmall));
+});
+
+test("设计契约：两栏必须等高（避免一侧露出大片空白）", () => {
+  const css = cssDecls(bundle);
+  const m = css.match(/\.dsp-duo\{([^}]*)\}/);
+  assert.ok(m, "找不到 .dsp-duo 规则");
+  assert.ok(!/align-items:start/.test(m[1]),
+    ".dsp-duo 不能用 align-items:start —— 实测两栏高度差 324px，"
+    + "右半边会出现一整块空白。宿主的卡片网格默认等高。实际=" + m[1]);
+  assert.ok(/align-items:stretch/.test(m[1]),
+    ".dsp-duo 应显式 stretch（两栏下沿对齐露不出缺口）；实际=" + m[1]);
+});
+
+test("设计契约：胶囊/标签不出现 line-height:1（文字会贴着行盒）", () => {
+  const css = cssDecls(bundle);
+  const bad = css.match(/\.dsp-(pill|chip|tag)\{[^}]*line-height:1\b/g) || [];
+  assert.deepEqual(bad, [],
+    "pill/chip/tag 不能用 line-height:1（实测 12px 字号配 12px 行高，2 倍缩放下挤在一起）；"
+    + "实际=" + JSON.stringify(bad));
+});
+
+// ---------------------------------------------------------------------------
+// 「门户进程」整块必须真的从**渲染结果**里消失（不是只从源码里删字符串）。
+//
+// 用户原话：「这个服务本身就随 dsh 打开和关闭的，不需要再有设置，太啰嗦」。
+// 他给的是那张「停止门户 / 刷新」的截图 —— 要的是**屏幕上没有它**。
+//
+// 为什么非渲染不可（我第一版就栽在这）：源码里 grep 「门户进程」为 0，
+// 看着像删干净了，其实那块只在 `running` 分支渲染；喂一个"未启动"的 status
+// 就永远渲染不到它，断言恒真 = 假通过。所以下面必须喂**运行中**的 status，
+// 并且这个检验要能对旧产物报 FAIL（已人工对比验证过非空转）。
+// ---------------------------------------------------------------------------
+test("渲染：运行中状态下面板不再出现「门户进程 / 停止门户」", () => {
+  const RUNNING = {
+    ok: true, running: true, portalPort: 8899, portalUrl: "http://127.0.0.1:8899",
+    baseUrl: "http://192.168.71.61:8899",
+    lanUrls: ["http://192.168.71.61:8899"],
+    publicUrl: "https://demo.trycloudflare.com",
+    password: "Abc123456789", lanPassword: "4182", lanAuthEnabled: true,
+    lanEnabled: true, lanPinCustom: false, publicPinCustom: false,
+    services: [], servicesDegraded: 0, autoStart: true,
+    lanCandidates: ["192.168.71.61"],
+  };
+  let nth = 0;
+  const R = {
+    createElement: (t, p, ...k) => ({ type: t, props: p, kids: k.flat(9).filter((x) => x != null) }),
+    useState: (init) => {
+      const i = nth += 1;
+      let v = typeof init === "function" ? init() : init;
+      if (i === 1) v = RUNNING; // 第一个 useState(null) 就是 status
+      return [v, () => {}];
+    },
+    useEffect: () => {}, useRef: () => ({ current: null }),
+    useCallback: (f) => f, useMemo: (f) => f(), Fragment: "F",
+  };
+  const requireShim = (r) => {
+    if (r === "react") return R;
+    throw new Error("unexpected require: " + r);
+  };
+  const win = { __ModuleLoader__: { load: () => {} } };
+  let captured = null;
+  win.__ModuleLoader__.load = (m) => { captured = m; return m; };
+  // eslint-disable-next-line no-new-func
+  new Function("window", "require", bundle)(win, requireShim);
+  const mod = captured.factory(requireShim);
+
+  const registered = [];
+  const ctx = {
+    slots: {
+      inject: (_n, cb) => cb(),
+      register: (opts, comp) => { registered.push({ ...opts, comp }); return () => {}; },
+    },
+    effect() {}, on() {}, get() { return undefined; },
+    inject: (_d, cb) => cb({ webServer: { register: () => () => {} } }),
+    logger: { info() {}, warn() {}, error() {} },
+  };
+  mod.apply(ctx, {
+    infraPath: ROOT, repoPath: "", portalPort: 8899, webEnabled: true,
+    autoStart: false, passwordMode: "random",
+  });
+
+  const flatten = (n, out = []) => {
+    if (n == null || typeof n === "boolean") return out;
+    if (typeof n === "string" || typeof n === "number") { out.push(String(n)); return out; }
+    if (Array.isArray(n)) { n.forEach((x) => flatten(x, out)); return out; }
+    if (n.kids) flatten(n.kids, out);
+    if (n.props && typeof n.props === "string") out.push(n.props);
+    return out;
+  };
+
+  const comp = registered.map((r) => r.comp).find((f) => typeof f === "function");
+  assert.ok(comp, "没有注册可渲染的设置面板组件");
+  nth = 0;
+  const text = flatten(comp({ view: "page", ctx })).join(" | ");
+
+  // 先证明"确实渲染到了运行中那一屏"，否则下面的断言毫无意义（假通过）
+  assert.match(text, /公网访问|外网访问|局域网/,
+    "没有渲染到「运行中」分支 —— 本检验会变成空转，必须修喂进去的 status");
+  assert.ok(!text.includes("门户进程"), "「门户进程」仍在渲染（用户要求删掉）");
+  assert.ok(!text.includes("停止门户"), "「停止门户」按钮仍在渲染");
+  // 「关闭公网访问」是**另一件事**（只收隧道），必须还在 —— 别连带删错
+  assert.ok(text.includes("公网"), "公网那一栏不该被误删");
+});

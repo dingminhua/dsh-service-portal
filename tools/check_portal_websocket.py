@@ -17,14 +17,18 @@ import json
 import os
 import socket
 import struct
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "test"))
+from portal_isolation import portal_env  # noqa: E402
 PORT = 9031
 WS_PORT = 9032
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -209,20 +213,17 @@ def main():
     server.start()
     time.sleep(0.3)
 
-    runs = os.path.join(ROOT, "runs")
+    # 状态目录隔离到临时目录（见 test/portal_isolation.py）：
+    # 原来是把用户真实状态文件移走再移回，中途异常退出会留在半残态。
+    runs = tempfile.mkdtemp(prefix="portal-runs-")
     state = os.path.join(runs, "portal_state.json")
     reg = os.path.join(runs, "portal_registry.json")
-    backups = {}
-    for path in (state, reg):
-        if os.path.exists(path):
-            backups[path] = path + ".ws-check"
-            os.replace(path, backups[path])
 
     log = open(os.path.join(runs, "ws-check.log"), "wb")
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8", os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(PORT), "--password", "ws-check-password-1", "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, env=portal_env(runs), stdout=log, stderr=subprocess.STDOUT)
     try:
         ready = False
         for _ in range(60):
@@ -317,12 +318,7 @@ def main():
             proc.kill()
         log.close()
         server.stop()
-        for path in (state, state + ".tmp", reg):
-            if os.path.exists(path):
-                os.remove(path)
-        for original, saved in backups.items():
-            if os.path.exists(saved):
-                os.replace(saved, original)
+        shutil.rmtree(runs, ignore_errors=True)   # 临时目录整棵删除
 
     passed = sum(1 for ok in results if ok)
     print("\nWebSocket 透传控制检验：%d/%d" % (passed, len(results)))

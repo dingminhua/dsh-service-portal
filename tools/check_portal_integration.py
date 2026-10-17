@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 
 try:
     import portal_console
+    import portal_login
     import portal_proxy
 except ImportError as exc:
     print("跳过：无法导入门户模块（%s）" % exc)
@@ -124,6 +125,27 @@ def main():
           needs_auth(True, True) is True)
     check("局域网开关关掉 -> 内网必须要求口令（不是只改界面）",
           needs_auth(False, False) is True)
+    # 但「要口令」只是纵深防御：真正的行为是**直接 403**（对齐 dsh-pocket
+    # issue #54）。降级成登录页会让手机用户以为自己口令输错了，而实际是
+    # 电脑那边把开关关了 —— 手机用户不是决策者，给登录页等于让他白试。
+    def lan_blocked(host, enabled):
+        return portal_proxy.lan_blocked(
+            portal_proxy.classify_host(host),
+            lan_enabled_provider=lambda: enabled)
+
+    check("局域网开关关掉 -> 内网被**主动拒绝**（不是降级成登录页）",
+          lan_blocked("192.168.1.5:8899", False) is True)
+    check("局域网开关开着 -> 不拦",
+          lan_blocked("192.168.1.5:8899", True) is False)
+    check("主动拒绝**不碰** loopback（否则本机自己都进不去）",
+          lan_blocked("127.0.0.1:8899", False) is False)
+    check("主动拒绝**不碰**公网（关局域网不该掐死公网）",
+          lan_blocked("x.trycloudflare.com", False) is False)
+    _page = portal_login.lan_disabled_html().decode("utf-8")
+    check("关闭页说明「请到电脑上开」，不是「口令错误」",
+          "局域网访问已关闭" in _page and "电脑" in _page
+          and "口令错误" not in _page,
+          "（不然手机用户会以为是口令输错了）")
     check("局域网开关关掉 + 本机访问仍免密（否则电脑上自己都进不去）",
           needs_auth(False, False, host="127.0.0.1:8899") is False)
     check("局域网开关关掉不影响公网判定（公网照样要口令）",

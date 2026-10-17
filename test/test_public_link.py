@@ -9,12 +9,19 @@ import json
 import os
 import socket
 import ssl
+import shutil
 import subprocess
 import sys
 import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from portal_isolation import portal_env, isolated_runs  # noqa: E402
+
+# 状态目录隔离：本测试会真的起门户，原来直接写用户真实的 runs/。
+_RUNS_ISO = isolated_runs()
+_RUNS_DIR = _RUNS_ISO.__enter__()
 PORT = 8899
 results = []
 
@@ -26,7 +33,10 @@ def check(label, cond, detail=""):
 
 def fetch(url, host=None, timeout=25):
     """用 curl 取（显式 --noproxy 绕过本机代理）。返回 (状态码, 正文)。"""
-    argv = ["curl.exe", "-s", "--noproxy", "*", "--max-time", str(timeout),
+    # 原来写死 "curl.exe"（Windows），macOS/Linux 上必然 FileNotFoundError。
+    # 优先 PATH 上的 curl，其次系统自带的 /usr/bin/curl。
+    _curl = shutil.which("curl") or shutil.which("curl.exe") or "/usr/bin/curl"
+    argv = [_curl, "-s", "--noproxy", "*", "--max-time", str(timeout),
             "-w", "\n__CODE__%{http_code}"]
     if host:
         argv += ["-H", "Host: %s" % host]
@@ -75,13 +85,13 @@ def ensure_portal():
                 return True
     except Exception:
         pass
-    log = open(os.path.join(ROOT, "runs", "public-link-check.log"), "wb")
+    log = open(os.path.join(_RUNS_DIR, "public-link-check.log"), "wb")
     subprocess.Popen(
         [sys.executable, "-X", "utf8",
          os.path.join(ROOT, "tools", "portal_run.py"),
          "--port", str(PORT), "--password", "public-link-check-1234",
          "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, env=portal_env(_RUNS_DIR), stdout=log, stderr=subprocess.STDOUT)
     for _ in range(60):
         time.sleep(0.5)
         try:
@@ -181,7 +191,7 @@ def main():
           'name="password"' in body, "code=%s" % code)
 
     # 7. 隧道注册日志（证明确实连上了 Cloudflare 边缘）
-    log = os.path.join(ROOT, "runs", "portal_logs", "cloudflared.log")
+    log = os.path.join(_RUNS_DIR, "portal_logs", "cloudflared.log")
     registered = False
     if os.path.exists(log):
         registered = "Registered tunnel connection" in open(

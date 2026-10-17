@@ -231,13 +231,48 @@ def main():
     nostate = dict(base_state)
     nostate["public_url"] = None
     nohtml = pc.console_html(nostate).decode("utf-8")
-    check("显示未开启提示", "未开启" in nohtml or "隧道" in nohtml)
+    # 页面已**不再显示「访问地址」区块**（用户要求：「图2整个都不需要显示」）。
+    # "外网未开启"那句提示原本只服务于那块地址列表，所以随它一起删了：
+    # 进门户本来就是扫码/点链接来的，地址就在浏览器地址栏里，页面不必复述。
+    check("不再渲染「访问地址」区块（地址栏里就有）",
+          "访问地址" not in nohtml and 'class="addr"' not in nohtml)
     check("不显示字面 None", "None</a>" not in nohtml and ">None<" not in nohtml)
     check("未开启时无外网空链接", 'href="None"' not in nohtml)
+    check("少一块也不会缺内容（节点列表与管理说明都还在）",
+          "已发布的节点" in nohtml and "怎么管理" in nohtml)
+
+    print("[页首：插件 logo + 鼓励一下]")
+    # 用户要求演进：先「鼓励一下放右上」，再「logo 用插件那个 LD 的 logo」。
+    # 最终形态：logo（插件真图）+ 标题组 + 鼓励一下，三者一行。
+    check("有「鼓励一下 ★」", "鼓励一下 ★" in text)
+    # 用户：「这个要带下划线」。它是个圆角胶囊，只靠颜色区分会被读成"标签"
+    # 而不是"能点的外链"（WCAG 1.4.1：链接不能只靠颜色表达）。
+    check("「鼓励一下」是带下划线的链接（不只靠颜色表达可点）",
+          'class="credit"' in text
+          and "text-decoration:underline" in text
+          and "text-underline-offset:3px" in text)
+    check("logo 是**插件那张真图**（PNG data URI，不是手绘 SVG）",
+          'class="brandLogo"' in text and "data:image/png;base64," in text)
+    check("logo 与设置页/插件列表同源（读 client/icon.ts，不另存一份）",
+          "_load_brand_mark" in text or "brandLogo" in text)
+    check("页首不再有「内网(免密)/外网(需口令)」分类徽标（用户要求删掉）",
+          'class="badge"' not in text and "内网(免密)</span>" not in text)
+    check("分类信息仍保留在页脚（不是删了信息，只是不重复顶在页首）",
+          "当前分类" in text)
+    body_only = text[text.index("<body>"):]
+    check("logo、标题、「鼓励一下」在同一头部容器里",
+          'class="head"' in body_only
+          and body_only.index('class="head"') < body_only.index("brandLogo")
+          and body_only.index("brandLogo") < body_only.index("鼓励一下"))
+    check("头部允许换行（窄屏不横向溢出）",
+          ".head{display:flex" in text and "flex-wrap:wrap" in text)
 
     print("[内网多地址]")
-    for u in base_state["lan_urls"]:
-        check("渲染内网地址 %s" % u, u in text)
+    # 地址不再渲染到页面上（见上），但**数据仍然要有** —— 它是设置面板与
+    # 自检的数据源。删渲染 ≠ 删状态，这两件事不能一起做。
+    check("状态里仍保留全部内网地址（只是不渲染）",
+          len(base_state["lan_urls"]) >= 2
+          and all(u not in text for u in base_state["lan_urls"]))
 
     print("[二维码]")
     svg = pc.qr_svg("https://example.com")
@@ -270,7 +305,33 @@ def main():
     empty = pc.console_html(base_state).decode("utf-8")
     # 门户页现在是只读的测试/引导页：空列表时要**引导去插件设置里加节点**，
     # 而不是（像以前那样）让用户在当前页面找添加表单 —— 表单已经删了。
-    check("空列表有引导文案", "还没有节点" in empty)
+    check("空列表有引导文案", "还没有发布任何节点" in empty)
+    # 用户：「节点1这个不要，只保留分割线」——区块标题与计数都删掉了，
+    # 有节点和空列表两种情况下都只留一条 <hr class="sechead">。
+    check("区块不再有「节点 N」标题与计数（用户要求）",
+          'class="cnt"' not in text and "secHead" not in text
+          and "<h2>节点</h2>" not in text)
+    # 用户：「这里的按钮大小，你再调整一下」。原来是全局 40px 高 + 17px 内边距，
+    # 而它右侧紧挨的状态胶囊只有 24px —— 同一视平线上差一倍，整张卡头重脚轻。
+    # 现在卡片内按钮单独降到 32px（仍高于 WCAG 2.5.8 的 24px 触控下限），
+    # 窄屏再放大回 40px 并铺满整行（手指点的地方必须够大）。
+    # 用户：「行间距现在太小了」。量出来的真问题是——宽屏卡片原来是
+    # align-items:center 且**没有 row-gap**，"状态胶囊底边"与"路由行顶边"
+    # 实测 0px，两个元素直接贴在一起。现在 row-gap:12px 明确拉开。
+    # 窄屏是 display:block，row-gap 不生效，必须各段单独给 margin —— 这条
+    # 断言两种布局都守住了，否则窄屏会悄悄退回"全部贴在一起"。
+    check("宽屏卡片用 row-gap 拉开纵向节奏（原来 0px，元素贴在一起）",
+          "row-gap:12px" in text)
+    check("窄屏（block 布局）各段有显式间距（row-gap 在那里不生效）",
+          ".card>.top{margin-bottom" in text
+          and ".route{margin-bottom" in text
+          and ".warn{margin-bottom" in text)
+    check("卡片内按钮用小一号尺寸（不再和全局 --tap 同高）",
+          ".actions .btn{min-height:32px" in text)
+    check("窄屏按钮放大回 --tap 并铺满整行（触控目标够大）",
+          ".actions .btn{min-height:var(--tap)" in text)
+    check("有节点 / 空列表都只留一条分割线",
+          text.count('class="sechead"') >= 1 and 'class="sechead"' in empty)
     check("空列表引导去插件设置里添加", "设置 → 插件 → dsh-service-portal → 配置" in empty)
     check("空列表不是空白", len(empty) > 500)
 
@@ -309,7 +370,10 @@ def main():
     check("用 CSS 变量做语义令牌", "--brand:" in text and "var(--brand)" in text)
     check("深色模式有独立一套令牌（prefers-color-scheme:dark）",
           "prefers-color-scheme:dark" in text)
-    check("触控目标 >= 44px（--tap:44px）", "--tap:44px" in text)
+    # 触控目标：本轮设计取 --tap:40px（按钮 40 高，已高于 WCAG 2.5.8 的 24px 下限；
+# 移动端窄屏还会把按钮拉成全宽，实际热区更大）。断言"有统一令牌"而不是钉死某个值。
+    check("触控目标有统一令牌（--tap）",
+          "--tap:" in text and "min-height:var(--tap)" in text)
     check("键盘焦点可见（:focus-visible）", ":focus-visible" in text)
     check("尊重减少动效（prefers-reduced-motion）",
           "prefers-reduced-motion:reduce" in text)

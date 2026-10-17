@@ -28,6 +28,17 @@ def read(path):
     return io.open(os.path.join(ROOT, path), encoding="utf-8").read()
 
 
+def _strip_comments(text):
+    """剥掉 CSS / JS 注释，只留可执行内容。
+
+    为什么需要它：很多断言是"某东西**不再出现**"。而那些东西的名字往往
+    正该留在注释里（记录踩过的坑、写"为什么不能这么写"）。按裸文本判会
+    把详尽的注释判成违规 —— 注释越诚实，检验越"失败"。
+    """
+    text = re.sub(r"/\*[\s\S]*?\*/", "", text)
+    text = re.sub(r"^\s*//.*$", "", text, flags=re.M)
+    return text
+
 def main():
     client = read("client/index.jsx")
     host = read("lib/index.js")
@@ -45,10 +56,15 @@ def main():
           "href: REPO_URL" in client and 'target: "_blank"' in client
           and '"noreferrer"' in client,
           "（dsh-pocket 也是 <a>，不是纯文字）")
+    # 标题行结构在 0.8.x 重构里从 `key: "head"` 改成了 `key: "hero"` 骨架
+    # （head/headText → hero/heroText/heroMeta）。断言跟着改成按 hero 定位：
+    # 钉的是"★ 链接在同一行内、不是页面底部"这个**意图**，不是某个旧 key 名。
+    # （原先钉死 "head"，重构后 client.index() 直接抛 ValueError，
+    #   整份检验在 ① 就中断了 —— 它已经过期，不是在保护什么。）
     check("区块在标题行内（不是页面底部）",
           0 < client.index('}, "鼓励一下 ★"),')
-          - client.index('key: "head"') < 900,
-          "（距离标题行 900 字符内）")
+          - client.index('key: "hero"') < 1400,
+          "（距离标题行 1400 字符内）")
     # 灰色 + 下划线（用户要的是低调灰，不要品牌蓝）。
     # 注意：这里原来钉的是 `var(--dsw-alias-label-tertiary,#8b93a1)` —— 而那个
     # 令牌**根本不存在**，等于一直在吃写死的灰。改用真实令牌 label-secondary 后，
@@ -71,7 +87,11 @@ def main():
     check("没有多行容器样式残留（credit / creditLine 已清理）",
           "creditLine" not in client and "styles.credit," not in client)
     check("链接不换行不压缩（窄面板下不被挤掉）",
-          'whiteSpace: "nowrap"' in client and "flexShrink: 0" in client)
+          # 外观已迁到注入的 CARD_CSS：nowrap 在 .dsp-link 里，flexShrink 在
+          # .dsp-heroMeta 的 flex 简写里（flex:0 0 auto 同样是"不压缩"）。
+          # 钉字面量 'flexShrink: 0' 是在钉旧的内联写法，重构后必然假失败。
+          (".dsp-link{" in client and "white-space:nowrap" in client)
+          and ("flex:0 0 auto" in client or "flex-shrink:0" in client))
     check("外链带 rel=noreferrer（防 window.opener 泄漏）",
           '"noreferrer"' in client)
     check("有 title 提示（短文案也能让人知道点了做什么）",
@@ -84,18 +104,23 @@ def main():
     print("\n[访问地址：二维码 + 复制按钮]")
     check("局域网二维码还在", "局域网二维码" in client and "qrs[lanPrimary]" in client)
     check("公网二维码还在", "公网二维码" in client and "qrs[publicUrl]" in client)
-    check("地址有复制按钮（局域网）",
-          'copyText("lan", lanPrimary)' in client)
-    check("地址有复制按钮（公网）",
-          'copyText("public", publicUrl)' in client)
-    check("复制后有「已复制」反馈（不是点了没反应）",
-          'copied === "lan" ? "已复制"' in client
-          and 'copied === "public" ? "已复制"' in client)
+    # 复制按钮已收敛成 addrRow 一个通用件：copyText(键, 地址)，键按调用点传
+    # "lan" / "public"。所以这里断言"两个调用点都走了 addrRow 且各带自己的键"，
+    # 而不是去匹配某一行写死的 copyText("lan", lanPrimary) 字面量。
+    check("地址复制按钮走统一的 addrRow（局域网 + 公网各一处）",
+          "const addrRow = (url, copyKey, withAccess, hint)" in client
+          and 'addrRow(lanPrimary, "lan"' in client
+          and 'addrRow(publicUrl, "public"' in client)
+    check("复制动作与反馈都按 copyKey 走（不是写死某一个键）",
+          "copyText(copyKey, url)" in client
+          and 'copied === copyKey ? "已复制"' in client)
     check("剪贴板不可用时有兜底（内网 http 非安全上下文会没有 clipboard API）",
           "execCommand" in client and "fallbackCopy" in client,
           "（没有兜底时按钮点了会静默失效）")
     check("地址行样式 addrRow 在（长 URL 可换行、按钮不被挤走）",
-          "addrRow:" in client and 'flexWrap: "wrap"' in client)
+          # 外观迁到 CARD_CSS：.dsp-addr 负责换行，.dsp-addrBtns 负责"按钮不被挤走"
+          ".dsp-addr{" in client and "word-break:break-all" in client
+          and ".dsp-addrBtns{" in client and "flex:0 0 auto" in client)
 
     # ---- 未启动状态：不能乱（用户：「初始未开启的状态很乱，感觉没有逻辑」）----
     #
@@ -108,24 +133,49 @@ def main():
           "running && status && status.startedAt" in client
           and "status && status.startedAt" in client,
           "（原来是无条件显示）")
-    check("未启动有专门的引导块（说明 + 将用地址 + 启动按钮）",
-          '"门户未启动"' in client and "启动后会使用这些地址" in client)
-    check("未启动时公网区块**不放按钮**（那个按钮点不动）",
-          ": running\n        ? h(\"button\"" in client
-          or "running\n        ? h(" in client,
-          "（原来公网按钮 disabled=!running，等于死按钮）")
-    check("未启动时明确说明「启动后可开公网」",
-          "门户未启动。启动后可以再开一个公网地址" in client)
-    check("未启动时有「还没探测过网卡地址」的兜底文案（首次使用）",
-          "还没探测过网卡地址" in client)
+    # 引导块：有标题 + 有说明 + 有启动按钮。
+    # ② "预告将用哪些地址"这一版**已被推翻**（用户："没有启动的时候，这两个不要
+    #   显示，显示也没意义"）—— 因为那地址是猜的（按上次网卡），照着配手机会
+    #   连不上。现在文案明确说"启动后显示在这块位置"。所以这里断言的是**不预告
+    #   地址**这个新意图，而不是旧的"启动后会使用这些地址"。
+    check("未启动有专门的引导块（标题 + 说明 + 启动按钮）",
+          '"门户未启动"' in client and "启动后显示在这块位置" in client
+          and "启动（只内网）" in client)
+    check("未启动时**不预告**地址（那是猜的，会给出查不出来的错线索）",
+          "启动后会使用这些地址" not in client
+          and "没有启动的时候" in client)
+    # 未启动时整页都不画局域网/公网两栏（见 if (!running) 那条注释），所以
+    # "公网区块里有没有按钮"这件事已经不存在了 —— 那两栏只在 running 时渲染。
+    check("未启动时不画两栏（整块在 if (running) 里，不会有死按钮）",
+          'if (!running) {' in client and 'name: "if (running)"' not in client
+          and "if (running) {" in client,
+          "（两栏只在运行中渲染，从结构上就没有 disabled 死按钮）")
+    # ③ "还没探测过网卡地址"这句兜底已随"不预告地址"一起删除 —— 不预告地址，
+    #    自然也不需要解释"为什么还没有地址"。
+    check("未启动时不再解释「怎么还没有地址」（不显示地址了）",
+          "还没探测过网卡地址" not in client)
     check("启动按钮在未启动引导块里（不再散落在页面下方）",
           "启动（只内网）" in client and "启动并开公网" in client)
-    check("运行中**能停**门户（原来只有 doStop 死代码，启停不对称）",
-          'onClick: doStop' in client and '"停止门户"' in client,
-          "（以前面板只能开不能关）")
+    # 「停止门户」整块 UI 已按用户要求**删除**（原话："这个服务本身就随 dsh
+    # 打开和关闭的，不需要再有设置，太啰嗦"）。门户改为随 DSH 退出自动收尾。
+    # 所以这几条从"检查停止按钮做得对不对"改成"检查停止按钮没有回来"——
+    # 功能删了而断言还在查它，就是断言在守一个已经不存在的东西（假失败）。
+    _code = _strip_comments(client)
+    check("「停止门户」按钮没有回来（门户随 DSH 退出自动收尾）",
+          # 注意不能直接找 "doStop"：doStopTunnel 里含这个子串。用词边界匹配。
+          re.search(r"\bdoStop\b", _code) is None,
+          "（回调 doStop 已删；只剩 doStopTunnel，语义=只收隧道。"
+          "注释里仍保留 doStop 的说明，所以判据是剥注释后的代码）")
+    check("停隧道与停门户是两件事（doStopTunnel 存在且注释写明语义）",
+          "const doStopTunnel" in client
+          and "只关隧道" in client)
+    check("不再有「停止门户」的后果说明（按钮都不在了）",
+          "停止后内网 / 公网地址都会失效" not in client)
     check("未启动时 problem 是普通说明（不是红字报警）",
-          "running ? styles.warn : styles.muted" in client
-          and "key: \"prob\"" in client,
+          # 样式已从内联 styles.warn/styles.muted 迁到 dsp-warn / dsp-inlineWarn，
+          # 断言按"停着时用普通提示、且节点仍在"的新实现来定。
+          'key: "prob"' in client
+          and "上次没有正常退出" in client,
           "（用户自己停的也算正常状态）")
     check("未启动时不显示公网风险警示（还轮不到）",
           # 警示按**实际状态**出现，且公网风险已合并进「公网访问」区块
@@ -138,17 +188,23 @@ def main():
           #
           # 判据必须是**字符串字面量**而不是裸文本：旧说法还留在注释里
           # （用来说明"为什么不能这么写"），按裸文本判会误报。
-          client.count('"拿到口令的人可以增删、开放或屏蔽你发布的节点') == 1
-          and '"拿到口令的人可以启停你开放的服务' not in client
-          and "if (running && lanAuth === false) {" in client
-          and "公网暴露风险" in client)
-    check("停止失败要报出来（宿主回 ok:false + stderr 时不能静默）",
-          'if (r && r.ok === false)' in client
-          and "没能停止门户" in client,
-          "（否则点了停止没反应，用户以为点错了）")
-    check("停止后一律重新拉状态（不信返回里的状态快照）",
-          "await load();" in client
-          and "// 一律重新拉状态" in client)
+          # 这段原来还断言了两件事，现在都**已被推翻**，所以改判新的结构：
+          #   · 底部"局域网免密"全局警示已删（并入局域网栏自己的密码说明）；
+          #   · 公网文案在未开启态是「开启前你需要知道」三条、开启态是风险条，
+          #     分属互斥分支，不是"重复讲"，上面 ⑤ 已按结构断言。
+          '"公网暴露风险"' in client
+          and "pub-none-steps" in client
+          and "if (running && lanAuth === false) {" not in client)
+    check("关闭公网失败要报出来（宿主回非 ok 时不能静默）",
+          # 原来钉的是 doStop（停门户）里的 'if (r && r.ok === false)' 与
+          # "没能停止门户"。停门户已删除，**同样的两道保护**现由 doStopTunnel
+          # 承担：失败抛错 → setError 显示；成功 → 重新拉状态。
+          "const doStopTunnel" in client
+          and 'if (!r || r.ok !== true) throw new Error' in client
+          and "setError(String(e && e.message" in client,
+          "（否则点了关闭没反应，用户以为点错了）")
+    check("操作成功后一律重新拉状态（不信返回里的状态快照）",
+          "await load();" in client)
 
     # ---- 排版：字号只能来自统一刻度，颜色只能用**真实存在**的主题令牌 ----
     #
@@ -158,11 +214,16 @@ def main():
     #   2. 用了 4 个**不存在**的 --dsw-alias-* 令牌，它们永远不命中，于是一直
     #      吃写死的浅色兜底：深色模式下文字和按钮就变成了浅色主题的颜色。
     print("\n[排版：统一字号刻度 + 只用真实令牌]")
-    import re as _re
+    _re = re  # 兼容旧写法；re 已在模块级 import
 
     # 真实令牌清单来自宿主主题（cordis inspect Theme.listTokens），写死在这里做守卫：
     # 以后谁再引用不存在的令牌，这条会拦下来。
-    real_tokens = {
+    #
+    # 只校验 **alias 命名空间**（--dsw-alias-* / --dsw-specific-*）。radius /
+    # shadow / focus-ring / --ds-* 属于另外几套命名空间，宿主确实提供（已在
+    # app.asar 里核实），不能一并判假 —— 早先这条规则把整份用户样式判成"可疑"，
+    # 反而让真正该拦的假 token 混在噪音里没人看。
+    real_alias_tokens = {
         "--dsw-alias-bg-base", "--dsw-alias-bg-layer-1", "--dsw-alias-bg-layer-2",
         "--dsw-alias-bg-overlay", "--dsw-alias-border-l1", "--dsw-alias-border-l2",
         "--dsw-alias-brand-primary", "--dsw-alias-label-primary",
@@ -170,15 +231,45 @@ def main():
         "--dsw-alias-state-idle-primary", "--dsw-alias-state-success-primary",
         "--dsw-alias-state-warn-primary", "--dsw-specific-sidebar-fill",
     }
-    used_tokens = set(_re.findall(r"var\((--dsw-[a-z0-9-]+)", client))
-    fake = sorted(used_tokens - real_tokens)
-    check("只引用真实存在的主题令牌（不存在的会静默吃浅色兜底）",
+    used_alias = set(_re.findall(
+        r"var\((--dsw-(?:alias|specific)-[a-z0-9-]+)", client))
+    fake = sorted(used_alias - real_alias_tokens)
+    check("只引用真实存在的**别名**令牌（不存在的会静默吃浅色兜底）",
           not fake, "可疑令牌=%r" % (fake,))
-    # 已知曾经踩过的四个，单独钉一遍（含"别名"写法，防止换个名字又混进来）
+    # 本轮修掉的假令牌，逐个钉死（防止换个写法又混回来）。
+    #
+    # 判据是"**被当作 CSS 值引用**"，不是"这段文字出现过"：假令牌的名字
+    # 本来就该允许出现在注释里（记录踩过的坑），否则注释越详细越判失败。
+    # 所以这里剥掉注释再查（_strip_comments 定义在模块级，见文件开头）。
+    code_only = _strip_comments(client)
     for gone in ("--dsw-alias-label-tertiary", "--dsw-alias-state-warning-primary",
                  "--dsw-alias-button-primary-fill",
-                 "--dsw-alias-label-primary-foreground"):
-        check("假令牌 %s 不再出现" % gone, gone not in client)
+                 "--dsw-alias-label-primary-foreground",
+                 # 下面这些是 2026-10 这轮从"看着有兜底"里挖出来的：
+                 "--dsw-alias-label-dimmed",      # placeholder 太淡的直接原因
+                 "--dsw-alias-border-l3", "--dsw-alias-border-l4",
+                 "--dsw-alias-state-business-primary",
+                 "--dsw-alias-interactive-bg-hover",
+                 "--dsw-alias-interactive-bg-hover-solid",
+                 "--dsw-alias-interactive-bg-active",
+                 "--dsw-alias-markdown-inline-code",
+                 "--dsw-alias-settings-card-fill",
+                 "--dsw-alias-settings-card-stroke",
+                 "--dsw-alias-state-warn-label",
+                 "--dsw-alias-switch-thumb",
+                 "--dsw-alias-toast-bg", "--dsw-alias-toast-label",
+                 "--dsw-alias-button-primary-hover"):
+        check("假令牌 %s 不再被引用（注释里说明无妨）" % gone,
+              gone not in code_only)
+
+    # placeholder 必须看得清：只允许 label-secondary（或更深），且不允许走
+    # --dsp-t3 那档（它曾经指向不存在的 label-tertiary，兜底 #8b95a5 在白底上
+    # 只有 ~2.9:1，用户反馈"输入框内的字看不清"）。
+    ph = _re.search(r"\.dsp-input::placeholder\{([^}]*)\}", client)
+    check("placeholder 颜色用真实且清晰的令牌（label-secondary）",
+          ph is not None and "label-secondary" in ph.group(1)
+          and "label-dimmed" not in ph.group(1)
+          and "dsp-t3" not in ph.group(1))
 
     # 字号刻度：只允许 TYPE.*（刻度本身定义在 TYPE 里）
     raw_sizes = _re.findall(r"fontSize:\s*(\d+)", client)
@@ -189,12 +280,16 @@ def main():
                      r"body:\s*13[\s\S]{0,80}caption:\s*12", client) is not None)
     check("说明文字不小于 12（再小在缩放屏上会糊）",
           "caption: 12" in client)
-    check("用 COLOR.* 统一取色（不再逐屏硬编码 hex）",
-          "const COLOR = {" in client
+    check("取色统一走令牌层（不再逐屏硬编码 hex）",
+          # COLOR 常量已按"内联样式压死 :hover"的整体重构**删除**，取色改为
+          # CARD_CSS 里的 --dsp-* 别名层（其值再指向真实 --dsw-alias-*）。
+          # 所以这里断言的是**同一意图**：不再有散落的硬编码 rgba/hex 颜色。
+          (":root{" in client or "--dsp-t1:" in client)
           and client.count("rgba(22,163,74") == 0
-          and client.count("rgba(107,114,128") == 0)
-    check("间距用 SPACE 刻度，行内不写裸 marginTop 数字",
-          "const SPACE = {" in client
+          and client.count("rgba(107,114,128") == 0,
+          "（颜色只能从 --dsp-* / --dsw-* 取）")
+    check("间距用 SPACE 刻度或 CSS gap，行内不写裸 marginTop 数字",
+          ("const SPACE = {" in client or "gap:18px" in client)
           and not _re.search(r"marginTop:\s*\d", client),
           "裸间距=%r" % (_re.findall(r"marginTop:\s*\d+", client),))
 
@@ -374,12 +469,22 @@ def main():
     check("本地门槛与后端一致（≥12 位）",
           "const PUBLIC_PIN_MIN = 12" in client
           and "MIN_PASSWORD_LEN = 12" in login)
-    check("有**成块**的公网风险警示（warnBox，不是一行灰字）",
-          "warnBox:" in client and 'styles.warnBox' in client)
+    check("有**成块**的公网风险警示（警示块，不是一行灰字）",
+          # warnBox 已迁到注入 CSS：成块警示统一用 .dsp-warn（左色条 + 浅底
+          # + 加粗标题），对应旧的内联 styles.warnBox。
+          ('className: "dsp-warn"' in client)
+          and ".dsp-warn{" in client
+          and "border-left:3px solid" in client)
     check("警示讲到了「拿到口令的人就能启停你开放的服务」",
           # 断言**含义**而不是某一版措辞：这条被改写/润色过两次，
           # 绑字面量会让"改进文案"变成"检验失败"，把人逼回去改文案。
-          "拿到口令的人" in client and "启停你开放的服务" in client)
+          # 另外 0.8.2 已取消"启停服务"能力（只做路由闸门），原文案是**夸大的**，
+          # 现在的措辞是"增删、开放或屏蔽节点，但动不了上游程序"—— 这条要断言
+          # 的是"讲清了拿到口令能做什么"，而不是那个已被推翻的"启停"。
+          "拿到口令的人" in client
+          and ("增删、开放或屏蔽你发布的节点" in client)
+          and "启停你开放的服务" not in _strip_comments(client),
+          "（不能夸大：插件只管路由，动不了上游进程）")
     check("警示提醒了「地址会变 / 勿收藏」（学 dsh-pocket 的临时性警示）",
           "请勿收藏" in client and "每次开启都会变" in client)
     check("自定义输入态里也有警告（用户是在这里输入密码的）",
@@ -411,23 +516,35 @@ def main():
     # 现在动作行只放动作，说明**另起一行**当副文本；每个动作区都有小标题。
     print("\n[⑤ 动作区排版：按钮与说明分层]")
     check("有专门的按钮行样式（动作不与说明混排）",
-          "actionRow:" in client and "styles.actionRow" in client)
-    check("「停止门户」的后果说明另起一行",
-          '"停止后内网 / 公网地址都会失效，设置与口令保留。"' in client)
-    check("门户进程那段有小标题（与「服务」同级，读起来是两块）",
-          '"门户进程"' in client)
-    check("底部不再重复公网风险（与公网区块同主题，去重）",
-          # 同一句话在整份客户端里只应出现一次（重复讲同一件事会显得页面在啰嗦）
-          client.count("拿到口令的人可以增删、开放或屏蔽你发布的节点") == 1
-          # 顺带钉住"不再重复域名每次会变"那句（公网区块已讲过）
+          # actionRow 已迁到 CARD_CSS 的 .dsp-row；"动作行"与"说明行"仍然是
+          # 两种节点（h("div", {className:"dsp-row"}) vs dsp-hint/dsp-warn）。
+          'className: "dsp-row"' in client and ".dsp-row{" in client)
+    # 「停止门户」整块 UI 已删（门户随 DSH 退出收尾），它的后果说明自然也不该在。
+    check("不再有「停止门户」及其后果说明（功能已删）",
+          "停止后内网 / 公网地址都会失效" not in client
+          and "const doStop =" not in client)
+    check("不再有「门户进程」小节（功能已删）",
+          # 注释里还留着"为什么删"的记录，所以先剥注释再判
+          '"门户进程"' not in _re.sub(r"/\*[\s\S]*?\*/", "", client)
+          .replace("// ============ 门户进程", ""))
+    check("公网风险只讲一处（未开启讲「须知」、开启后才显示风险条，两者互斥）",
+          # 早先这条要求整份客户端只出现一次。现在它出现在**两个互斥分支**里：
+          #   · publicUrl 为空 → 「开启前你需要知道」三条（pub-none-steps）
+          #   · publicUrl 存在 → 底部「公网暴露风险」条（pub-risk）
+          # 同一时刻只会渲染其中一个，所以不是"重复讲"。断言改成**结构**：
+          # 两处分别挂在对应分支上，而不是数总次数。
+          "pub-none-steps" in client and "pub-risk" in client
           and client.count("地址是随机 trycloudflare 域名，每次开启都会变") == 1)
     check("未开公网时不再教用户「点关闭公网」（那个按钮那时不在）",
           "不用时请点上方「关闭公网」" in client
           and "children.push(h(\"div\", { key: \"warn\", style: styles.warn }," not in client)
     check("警示不再用 emoji 当结构标记（改用色条 + 加粗标题）",
           "⚠️ 公网暴露风险" not in client and "⚠ 公网开启后" not in client)
-    check("底部警示只在「免密」时出现（跨区块的全局安全提示）",
-          "if (running && lanAuth === false) {" in client)
+    check("底部不再有「局域网免密」全局警示（已并入局域网栏内的密码说明）",
+          # 那一块原在页面最底部，条件是 running && lanAuth === false。
+          # 局域网栏现在自己就说清了"已关闭：同一 WiFi 扫码直连"，底部再说一遍
+          # 是同一件事讲两遍。断言它没有回来。
+          "if (running && lanAuth === false) {" not in client)
 
     # ================= ⑥ 节点管理在设置页（门户页只读）=================
     #
@@ -441,7 +558,8 @@ def main():
     #   · 「门户页面只读 —— 相当于一个测试页和引导页，没有设置功能」。
     print("\n[⑥ 节点管理在设置页 · 门户页只读]")
     check("设置页有节点清单渲染",
-          "styles.svc" in client and '"对外发布的节点"' in client)
+          'className: "dsp-node"' in client and '"对外发布的节点"' in client,
+          "（样式类从 styles.svc 迁到 .dsp-node）")
     check("数据来自宿主 /status 的 services",
           "status.services" in client and "services" in host)
     check("**开关是「开放 / 屏蔽」**（不是服务启停）",
@@ -461,13 +579,44 @@ def main():
     check("启动时不再自动拉起服务", 'entry.get("autoStart")' not in run)
     check("删除节点时不再顺手停上游进程",
           "registry.remove(key)" in run and "supervisor.stop" not in run)
-    check("每个节点有「访问」", '"访问"' in client and "serviceUrl" in client)
-    check("地址行「复制」旁也有「访问」（局域网 + 公网共 2 处）",
-          client.count('className: "dsp-access"') == 2)
-    check("「访问」链接用品牌色描边（与「复制」区分开）",
-          # 外观在 .dsp-access 类里（内联压不过 :hover，所以必须迁过去）
-          ".dsp-access{" in client
-          and "border:1px solid var(--dsw-alias-brand-primary" in client)
+    # ---- 节点卡片的访问入口：内网 / 公网各一个，各自判断自己的开关 ----
+    #
+    # 用户要求：「这里要有内网访问、公网访问 2 个访问按钮，各自判断当前是否
+    # 开启，开启才能点击」。为什么要两个：两条通道的开关互相独立（关掉局域网
+    # 后公网仍可用；没开公网时公网按钮没有意义），合成一个就只能给死链或靠猜。
+    check("每个节点有「内网访问」与「公网访问」两个入口",
+          '"内网访问"' in client and '"公网访问"' in client)
+    check("两个入口各自算自己的地址（不再是单一 serviceUrl）",
+          "const serviceUrls = (svc)" in client
+          and "lan: lanBase + path" in client
+          and "pub: publicUrl ? publicUrl + path" in client,
+          "（serviceUrl 已删，避免两个按钮共用一条地址）")
+    check("内网按钮按 lanEnabled 判断能否点",
+          "lanEnabled === true" in client
+          and "serviceUrls(svc).lan : undefined" in client)
+    check("公网按钮按 publicUrl 判断能否点",
+          "publicUrl ? serviceUrls(svc).pub : undefined" in client)
+    check("未开启的那个**不给 href**（<a> 没有 :disabled，只能这样真禁掉）",
+          client.count("href: ") >= 2
+          and ": undefined," in client)
+    check("未开启时点它也不会跳走（preventDefault 兜一层）",
+          client.count("(e) => e.preventDefault()") >= 2)
+    check("未开启时给出「去哪开」的原因（不能只是灰掉）",
+          "先在「局域网访问」里打开开关" in client
+          and "先点「开启公网访问」" in client)
+    check("禁用态有 .is-disabled 外观（<a> 没有 :disabled）",
+          ".dsp-btn.is-disabled{" in client)
+    # 用户明确的一个组合：内网没开、公网也没开 -> **两个按钮都必须是禁用的**，
+    # 但节点卡与「屏蔽 / 编辑 / 删除」仍要完整可用（"打不开"不等于"不能管理"）。
+    # 这一条靠预览状态 svcnone 出图核对过，这里把它钉成结构：两处判据分别绑在
+    # 自己的状态上，且**没有任何一条**回退成"只要有节点就给 href"。
+    check("两边都没开时，两个按钮各自独立变灰（不是共用一条判据）",
+          client.count("is-disabled") >= 2
+          and client.count(": undefined,") >= 2)
+    check("节点被屏蔽时两个访问入口都不出现（路由不转发，给了就是死链）",
+          "open\n                ? h(\"a\", {" in client
+          and client.count("open\n                ? h(\"a\", {") >= 2)
+
 
     # ---- 宽度适配 + 交互态（用户：「宽度变了…设计美观的细节完善一下」）----
     #
@@ -478,36 +627,56 @@ def main():
     check("卡片**不再**写死 maxWidth 560（宽栏里会缩成窄柱）",
           "maxWidth: 560" not in client)
     check("卡片用满可用宽度且有上限（避免行长过长）",
-          'max-width:880px' in client and "maxWidth: 880" not in client)
+          # 上限从 880 调到 960（两栏 + 二维码在这个宽度下更舒展），断言改成
+          # "有上限、且不是内联写死的"——这不是在钉某个具体像素。
+          "max-width:960px" in client and "maxWidth: 880" not in client
+          and "maxWidth: 960" not in client)
     check("局域网/公网两栏并排（原来在窄柱里竖着叠，两个二维码要滚很久）",
           ".dsp-duo{" in client and "grid-template-columns" in client
           and "auto-fit" in client)
     check("窄屏塌成单栏（窄面板/手机上不能两栏硬挤）",
-          "@media (max-width:720px)" in client and "grid-template-columns:1fr" in client)
+          # 断点从 720 调到了 760（两栏最小 300 时 720 会提前塌）。断言按"有单栏
+          # 兜底"来定，不绑断点数值 —— 断点属于调参，不是契约。
+          _re.search(r"@media \(max-width:\d+px\)\{[\s\S]{0,200}?\.dsp-duo\{grid-template-columns:1fr\}",
+                     client) is not None)
     check("窄屏二维码缩小（176 在手机上会占掉半屏）",
-          ".dsp-qr{width:132px;height:132px}" in client)
+          # 值从 132 调到 148（桌面 168）。同样只断言"窄屏里确实变小了"。
+          _re.search(r"\.dsp-qr,\.dsp-qrEmpty\{width:(\d+)px;height:\1px\}",
+                     client) is not None,
+          "（窄屏档存在且宽高一致）")
     check("注入的是真实 <style>（内联做不了 hover/@media）",
           "document.createElement(\"style\")" in client
           and "document.head.appendChild" in client)
     check("样式注入是幂等的（重新挂载不会越堆越多）",
           "data-plugin-css" in client and "querySelector" in client)
     check("**按钮有 hover 与 disabled 视觉**（规范：可点击元素要有按压反馈）",
-          ".dsp-primary:hover" in client and ":disabled" in client)
+          # 类名从 .dsp-primary 改名为 .dsp-btn-primary（与宿主 Button 对齐）。
+          # ":disabled" 仍然要有，且 hover 规则必须挂在会变色的那个按钮类上。
+          ".dsp-btn-primary:hover" in client and ":disabled" in client)
     check("**键盘焦点可见**（规范：focus-visible）",
-          ":focus-visible" in client and "outline:2px solid" in client)
+          # 焦点环的写法从写死的 outline:2px solid 变成 --dsp-focus（令牌化：
+          # 2px solid 品牌色）。断言意图：有 focus-visible 规则且轮廓可见。
+          ":focus-visible" in client
+          and ("outline:2px solid" in client
+               or ("--dsp-focus:" in client and "solid" in client)))
     check("尊重 prefers-reduced-motion（规范要求）",
           "prefers-reduced-motion:reduce" in client)
     check("类名统一 dsp- 前缀（不与宿主/别的插件撞车）",
           client.count("dsp-") >= 20)
     check("**按钮外观不再内联**（内联会压死类里的 hover，白写）",
-          # 只针对需要交互态的四个按钮原语：底部背景/描边必须只在类里。
+          # 只针对需要交互态的按钮原语：底部背景/描边必须只在类里。
           # warnBox/tag/svcMount 那些是静态装饰（没有 hover 语义），
           # 内联它们的底色是合理的，不在此列。
+          #
+          # 0.8.x 重构把这些内联样式表整个删了（连 `primary: {}` 这种空占位
+          # 都不留），改为 CARD_CSS 一元化。所以断言从"空占位对象还在"改成
+          # 真正要守的两条**意图**：
+          #   · 不得出现内联品牌底色（会盖掉 :hover / :disabled）；
+          #   · 四个按钮原语的外观必须由类选择器提供（.dsp-btn 系列在 CSS 里）。
           client.count("background: COLOR.brand") == 0
-          and "styles.primary = {" not in client
-          and "primary: {}," in client
-          and "btn: {}," in client
-          and "danger: {}," in client)
+          and "background: COLOR.brand" not in client
+          and ".dsp-btn-primary{" in client
+          and ".dsp-btn-danger{" in client)
     check("**自动发现已删掉**（界面/接口都没了）",
           "discover" not in client.lower() and "discover" not in host.lower()
           and "/discover" not in run)

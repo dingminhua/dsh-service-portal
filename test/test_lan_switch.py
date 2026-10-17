@@ -9,6 +9,10 @@ import time
 import urllib.error
 import urllib.request
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from portal_isolation import isolated_runs, portal_env  # noqa: E402
+
 ROOT = os.getcwd()
 PORT = 9003
 NEED_LOGIN = b'name="password"'
@@ -33,15 +37,22 @@ def call(path, host, method="GET", data=None, ctype=None):
 
 
 def main():
-    state = os.path.join(ROOT, "runs", "portal_state.json")
-    backup = state + ".lanswitch"
-    if os.path.exists(state):
-        os.replace(state, backup)
-    log = open(os.path.join(ROOT, "runs", "lanswitch.log"), "wb")
+    # 状态目录用**临时目录**，不碰用户真实 runs/。
+    #
+    # 这里原来是"把用户的 portal_state.json 移走、跑完再移回来"。实际事故：
+    # 它起停了一次门户，用户的状态被写成 stopped_clean=true，他打开设置页看到
+    # 「门户未启动」—— 一个测试把用户正在用的门户关了。备份/还原在异常退出时
+    # 也不会执行，等于把用户状态留在半残态。
+    with isolated_runs() as runs:
+        return _run(runs)
+
+
+def _run(runs):
+    log = open(os.path.join(runs, "lanswitch.log"), "wb")
     proc = subprocess.Popen(
         [sys.executable, "-X", "utf8", "tools/portal_run.py",
          "--port", str(PORT), "--password", "lansw-password-123456", "--lan-only"],
-        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        cwd=ROOT, env=portal_env(runs), stdout=log, stderr=subprocess.STDOUT)
     ok = True
     try:
         time.sleep(6)
@@ -59,8 +70,28 @@ def main():
         print("%s 2) 从本机关闭局域网开关（HTTP %s）" % ("PASS" if a else "FAIL", code))
         ok &= a
 
-        a = NEED_LOGIN in call("/", lan)[1]
-        print("%s 3) 关掉后内网被要求口令" % ("PASS" if a else "FAIL"))
+        # 关掉后是**硬 403**，不是登录页、也不是"输口令就能进"。
+        # 为什么必须是 403（对齐 dsh-pocket 的 issue #54）：手机端的人不是
+        # 决策者，给他一个登录页等于让他以为自己口令错了，白试一遍。
+        code, body = call("/", lan)
+        a = code == 403 and NEED_LOGIN not in body
+        print("%s 3) 关掉后内网直接 403（不是登录页） HTTP %s" % ("PASS" if a else "FAIL", code))
+        ok &= a
+
+        a = "局域网访问已关闭" in body.decode("utf-8", "replace")
+        print("%s 3b) 403 页面说明「已关闭」并指向电脑上开" % ("PASS" if a else "FAIL"))
+        ok &= a
+
+        # JSON 请求要拿到机器可读的原因，别让前端把它当网络故障静默重试
+        code, body = call("/_api/state", lan)
+        a = code == 403 and b"lan-disabled" in body
+        print("%s 3c) 关掉后 API 也 403 且带 lan-disabled（可取判）" % ("PASS" if a else "FAIL"))
+        ok &= a
+
+        # 公网不受这个开关影响：它照旧走自己的口令
+        code, body = call("/", "x.trycloudflare.com")
+        a = NEED_LOGIN in body
+        print("%s 3d) 关局域网不掐死公网（公网仍要口令）" % ("PASS" if a else "FAIL"))
         ok &= a
 
         a = NEED_LOGIN not in call("/", loop)[1]
@@ -84,11 +115,7 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
         log.close()
-        for path in (state, state + ".tmp"):
-            if os.path.exists(path):
-                os.remove(path)
-        if os.path.exists(backup):
-            os.replace(backup, state)
+        # 临时目录由 isolated_runs() 负责整棵删除，这里不需要还原任何东西
     print("\n局域网总开关验证：%s" % ("全部通过" if ok else "有失败"))
     return 0 if ok else 1
 

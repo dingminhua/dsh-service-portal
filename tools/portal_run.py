@@ -10,7 +10,7 @@ start_public_gui.py 是「先写死服务清单 -> 拉起 -> 建隧道」，改�
   · 门户进程（portal_proxy）—— 同时监听内网与隧道回连，按 Host 分类认证；
   · 控制台页 —— 在浏览器里管理服务、开关、点链接访问；
   · 内网地址自动探测（所有网卡的私网 IP）；
-  · 外网走 cloudflared 隧道（复用本机已有的 cloudflared.exe）。
+  · 外网走 cloudflared 隧道（复用本机已有的 cloudflared）。
 
 架构
 ----
@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -65,8 +66,40 @@ TUNNEL_LOG = "cloudflared.log"
 # 注意：本文件里 host_repo **只写进状态给界面显示**（见下方 status 字典），
 # 服务清单是走 runs/portal_registry.json 的，不依赖它 —— 所以留空不影响启动。
 DEFAULT_HOST_REPO = os.environ.get("SERVICE_HOST_REPO", "")
-DEFAULT_CLOUDFLARED = os.path.join(
-    os.path.expanduser("~"), ".dsh", "dsh-pocket", "bin", "cloudflared.exe")
+def _resolve_cloudflared():
+    """找本机可用的 cloudflared —— **必须跨平台**。
+
+    这里原来写死 `.../bin/cloudflared.exe`：Windows 上成立，macOS/Linux 上
+    那就是个**不存在的文件名**（同一目录里实际叫 `cloudflared`，没有后缀）。
+    后果不是"报个错就算了"，而是整个公网功能哑掉：
+
+        POST /_api/tunnel/start -> 502
+        {"detail": "找不到 cloudflared：/Users/.../bin/cloudflared.exe"}
+
+    而且 macOS 上这个路径**肉眼看着是对的**（目录里确实有个 cloudflared），
+    只有注意到 `.exe` 才能发现 —— 这就是"开启公网访问失败"的真凶。
+
+    顺序：显式配置 > 同目录下的平台正确文件名 > PATH。
+    """
+    home = os.path.expanduser("~")
+    names = ["cloudflared.exe", "cloudflared"] if sys.platform == "win32" \
+        else ["cloudflared", "cloudflared.exe"]
+    for base in (os.path.join(home, ".dsh", "dsh-pocket", "bin"),
+                 os.path.join(home, ".dsh", "bin"),
+                 os.path.join(home, ".local", "bin"),
+                 "/usr/local/bin", "/opt/homebrew/bin"):
+        for name in names:
+            candidate = os.path.join(base, name)
+            if os.path.isfile(candidate):
+                return candidate
+    found = shutil.which("cloudflared")
+    if found:
+        return found
+    # 一个都没找到：回落到"平台正确"的默认名，好让报错信息指对地方。
+    return os.path.join(home, ".dsh", "dsh-pocket", "bin", names[0])
+
+
+DEFAULT_CLOUDFLARED = _resolve_cloudflared()
 
 
 def _log_path(name):
@@ -465,7 +498,12 @@ def run_portal(args):
         """按需建立隧道（设置页「开启外网访问」）。返回 (ok, 说明)。"""
         cloudflared = args.cloudflared or DEFAULT_CLOUDFLARED
         if not os.path.isfile(cloudflared):
-            return False, "找不到 cloudflared：%s" % cloudflared
+            # 报错必须给出**下一步怎么修**。只说"找不到"会让用户卡在这里，
+            # 而这恰恰是当初"开启公网访问失败"只留一个 502 的教训。
+            return False, ("找不到 cloudflared（尝试过：%s）。"
+                           "请安装 cloudflared 并确保它在 PATH 里，"
+                           "或用 --cloudflared <路径> / 设置页的 cloudflared 路径指定。"
+                           % cloudflared)
         proc = tunnel_proc["proc"]
         if proc is not None and proc.poll() is None and public_url_holder["url"]:
             return True, "隧道已在运行"
@@ -1241,7 +1279,7 @@ def build_parser():
     ap.add_argument("--python", default=sys.executable or "python",
                     help="拉起服务用的解释器")
     ap.add_argument("--cloudflared", default=DEFAULT_CLOUDFLARED,
-                    help="cloudflared.exe 路径")
+                    help="cloudflared 可执行文件路径（默认自动探测本机已有的那份）")
     ap.add_argument("--lan-only", action="store_true", help="只开内网，不建隧道")
     ap.add_argument("--lan-auth", action="store_true",
                     help="内网访问也要求口令（默认内网免密，仅同一局域网可用）")
