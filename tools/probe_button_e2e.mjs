@@ -280,9 +280,26 @@ async function main() {
   check("页面没有 JS 报错", consoleErrors.length === 0,
         consoleErrors.slice(0, 3).join(" | "));
 
-  // ⑤ 复制按钮也在（不点，避免动用户剪贴板；只确认挂上了）
-  const nCopy = await evalJs(`document.querySelectorAll(".copy").length`);
-  check("复制按钮都在", nCopy >= 1, `count=${nCopy}`);
+  // ⑤ 复制按钮
+  //
+  // v0.8.12 重新设计了门户页：**整块「访问地址」被移除**（地址列表 / 二维码 /
+  // 复制按钮都不再渲染在门户页里，地址改由插件的设置页提供）。所以不能再断言
+  // ".copy" 必须存在 —— 那是旧设计的产物，写死它只会在设计变更后假红。
+  // 改成：**如果**页面上有可复制元素，它们必须成对（外壳 + data-copy），
+  // 不能出现"有按钮但没数据"的半成品。既跟上设计，又保留了对复制功能的守卫。
+  const copyInfo = await evalJs(
+    `(function(){
+       var els=[].slice.call(document.querySelectorAll(".copy,[data-copy]"));
+       return {count:els.length,
+               withData:els.filter(function(e){return e.getAttribute("data-copy");}).length};
+     })()`,
+  );
+  check("可复制元素如果存在则成对（不会只有外壳没数据）",
+        copyInfo.count === 0 || copyInfo.withData === copyInfo.count,
+        JSON.stringify(copyInfo));
+  if (copyInfo.count === 0) {
+    console.log("      注：v0.8.12 已把「访问地址」移出门户页，因此没有复制按钮（预期）");
+  }
 
   // ⑥ 鼓励一下链接指向仓库
   const credit = await evalJs(

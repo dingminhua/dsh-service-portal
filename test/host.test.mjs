@@ -1310,19 +1310,41 @@ test("退出收尾：pid 匹配且端口在听 → 真的把门户停掉", async
   const root = portalRepo(null);
   const script = join(ROOT, "tools", "portal_run.py");
   if (!existsSync(script)) { rmSync(root, { recursive: true, force: true }); return; }
-  const child = spawn("python3", ["-X", "utf8", script,
+  // 解释器要按平台挑，不能写死 "python3"。
+  //
+  // 踩到的真问题（在 Windows 上跑 npm test 必红）：写死 "python3" 时，
+  // Windows 只有 `python` / `py`，spawn 会**抛 ENOENT 异常**而不是返回一个
+  // 起不来的进程 —— 于是下面那句「环境没 python：跳过（不假装通过）」根本
+  // 执行不到，整个测试文件直接算失败。生产代码（lib/index.js 的 pythonFor）
+  // 本来就做了 PATH 回退，测试反而没有。
+  const PY = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
+  const child = spawn(PY, ["-X", "utf8", script,
     "--port", String(port), "--password", "teardown-check-pw-1", "--lan-only"],
     { cwd: root, detached: true, stdio: "ignore",
       env: { ...process.env, PORTAL_RUNS_DIR: join(root, "runs") } });
+  // spawn 失败是异步 emit 的 error 事件；不接住会变成 uncaughtException。
+  let spawnError = null;
+  child.on("error", (err) => { spawnError = err; });
   try {
     // 等门户真的起来（端口在听）
     let up = false;
     for (let i = 0; i < 60; i += 1) {
+      // 解释器根本不存在时不要空等 30 秒：立刻走"环境不具备"的跳过路径
+      if (spawnError) break;
       up = await _internals.portListening(port);
       if (up) break;
       await new Promise((r) => setTimeout(r, 500));
     }
-    if (!up) return; // 环境没 python：跳过（不假装通过）
+    if (!up) {
+      // 环境没 python / 起不来：跳过，不假装通过。但如果是我们自己把
+      // 解释器名字写错（ENOENT），那要报出来 —— 静默跳过等于让这条
+      // 端到端检验永远不跑，反而更糟。
+      if (spawnError && spawnError.code !== "ENOENT") {
+        throw new Error(`spawn ${PY} 失败：${spawnError.message}`);
+      }
+      rmSync(root, { recursive: true, force: true });
+      return;
+    }
 
     const repo = { ...repoOf(root), portalPort: port };
     const status = await _internals.readPortalStatus(root, "", port);

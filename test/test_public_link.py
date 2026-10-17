@@ -191,12 +191,55 @@ def main():
           'name="password"' in body, "code=%s" % code)
 
     # 7. 隧道注册日志（证明确实连上了 Cloudflare 边缘）
-    log = os.path.join(_RUNS_DIR, "portal_logs", "cloudflared.log")
+    #
+    # 这里要处理两种现场，否则会**必然**失败：
+    #
+    #   ① 本测试自己起的门户（ensure_portal 走到 Popen 那条路）：
+    #      cloudflared 日志在 _RUNS_DIR/portal_logs/ 下。
+    #   ② 复用了一个**已经在跑**的门户（ensure_portal 开头探到 8899 健康就
+    #      直接 return）。这时它的日志在它自己的 runs 目录里 —— 而测试用的是
+    #      隔离目录，于是"日志不存在"，断言恒失败。
+    #      这正是 v0.8.12 上每次跑都红的原因（隔离改造只改了测试，没改这条断言）。
+    #
+    # 还有时序：拨隧道后 cloudflared 要 3~6 秒才写出 `Registered tunnel connection`
+    # （前面先打 precheck/QUIC/TCP），所以必须轮询，不能读一次就判。
+    #
+    # 复用的门户日志找不到时，改用**更硬的证据**：公网地址此刻真的回 200。
+    # 那比 grep 一行日志更接近"隧道真的通了"这个命题。
+    def _log_says_registered(path):
+        try:
+            if os.path.exists(path):
+                return "Registered tunnel connection" in open(
+                    path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            pass
+        return False
+
+    candidates = [
+        os.path.join(_RUNS_DIR, "portal_logs", "cloudflared.log"),
+        os.path.join(ROOT, "runs", "portal_logs", "cloudflared.log"),
+    ]
     registered = False
-    if os.path.exists(log):
-        registered = "Registered tunnel connection" in open(
-            log, encoding="utf-8", errors="replace").read()
-    check("cloudflared 已注册到 Cloudflare 边缘（隧道真的通了）", registered)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if any(_log_says_registered(p) for p in candidates):
+            registered = True
+            break
+        time.sleep(0.5)
+
+    if not registered and url:
+        # 兜底：日志不可得（复用了别人的门户）时，用公网可达性作为证据。
+        code, body = fetch(url)
+        if code == 200:
+            registered = True
+            check("cloudflared 已注册到 Cloudflare 边缘（以公网可达为证）",
+                  True, "日志不可得，改用 %s 返回 200 佐证" % url)
+        else:
+            check("cloudflared 已注册到 Cloudflare 边缘（隧道真的通了）",
+                  False, "日志无 Registered 且 %s 返回 %s" % (url, code))
+    else:
+        check("cloudflared 已注册到 Cloudflare 边缘（隧道真的通了）", registered,
+              "试过 %s" % ", ".join(candidates))
 
     passed = sum(1 for ok in results if ok)
     print("\n公网链路验证：%d/%d" % (passed, len(results)))
