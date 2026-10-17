@@ -220,6 +220,77 @@ python -X utf8 test\acceptance_portal.py    # 30 checks
 > into the root plugin** as a generic, manifest-driven portal (not bound to any specific
 > service), and the child plugin directory was removed.
 
+## Marketplace listing
+
+The plugin ships an installable `dsh.bundle` manifest and is published to npm. Community
+marketplaces usually sync entries from the
+[Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) registry; the
+in-repo submission draft lives at
+[`awesome-dsh-plugin-submission/dingminhua__dsh-service-portal.yml`](https://github.com/dingminhua/dsh-service-portal/blob/main/awesome-dsh-plugin-submission/dingminhua__dsh-service-portal.yml).
+
+> That link is an absolute GitHub URL on purpose: `awesome-dsh-plugin-submission/` and
+> `screenshots.json` are **not** in the `files` whitelist of `package.json` (they serve the repo
+> and the listing process, not the npm package). A relative link would 404 on the npm page.
+
+**Listing conventions** (per Awesome DSH Plugin's `contributing.md`):
+
+- One YAML per plugin at `data/plugins/<owner>__<repo>.yml` with `url` (must match the repo URL
+  exactly), `name` (`owner/repo`), `category` (a valid value; ours is `remote`), and
+  `description.en` (required, ends with a period) / `description.zh` (optional). Any description
+  containing `: ` must be quoted.
+- The repo must declare the `dsh.bundle` manifest (ours: `dsh.bundle.patch: ./cordis.patch.yml`)
+  and carry the `dsh-plugin` topic; CI checks for at least 10 commits and a repo age of 1 day.
+- At most 3 plugins per PR; only touch your own entry.
+
+Marketplace cards and README badges are two separate mechanisms:
+
+- **GitHub badges** come from the Shields links at the top of this README.
+- **Marketplace screenshots** are declared by the plugin's own
+  [`screenshots.json`](https://github.com/dingminhua/dsh-service-portal/blob/main/screenshots.json)
+  at the repo root; the registry's `data/screenshots.json` is a legacy fallback and takes no new keys.
+- **Marketplace icon/placeholder** is decided by each marketplace's own rules — it is neither a
+  generic `package.json` field nor a README badge.
+
+## Known limitations
+
+- **Random domain, never fixed**: every start gets a one-off `*.trycloudflare.com`; it dies on
+  close or restart and may be recycled by someone else as an unrelated site. A **fixed custom
+  domain** needs a named tunnel + ingress, which this plugin does not support. The UI therefore
+  keeps saying "do not bookmark, scan the current QR code from this page each time".
+- **cloudflared must already be installed**: we reuse the local copy and **never auto-download**
+  (sibling dsh-pocket downloads from several mirrors). When it is missing, "Open public access"
+  fails outright and says why.
+- **Liveness is only probed on refresh**: the console and settings page probe the upstream port
+  when opened; there is no background timer, so a service that just died may still look alive
+  until you refresh.
+- **Public reachability depends on the quick tunnel and Cloudflare edge**: DNS propagation can
+  take seconds to tens of seconds; `check_portal_tunnel.py` waits for it before judging. When it
+  fails, read the cloudflared log before blaming the plugin.
+- **Password-free LAN access is a default, not a security recommendation**: any device on the same
+  WiFi can open the portal without a password. On untrusted networks, turn on the LAN password.
+  This is a deliberate trade-off (scan-and-go convenience) and the UI states it plainly.
+- **Node >= 22 and host API version**: the plugin needs DSH's `webServer` / `settings` capabilities.
+  When a host lacks them the plugin fails closed (mounts no routes) instead of half-working.
+- **Windows / macOS / Linux are all verified**, but `cloudflared` candidates are derived from the
+  platform plus common install locations; if yours is elsewhere, point to it via config.
+
+## Disclaimer
+
+- This project is **for personal learning and research only**. Use it solely to expose local
+  services **you own or are authorised to access**; do not use it commercially or beyond a
+  reasonable personal scope.
+- **Exposing something publicly is your own decision and your own risk.** Once public access is
+  on, anyone holding the address and password can reach your published nodes (they can add, open
+  or block nodes, but cannot start or stop the upstream programs). Do not leave an admin password
+  exposed publicly for long, and turn public access off when you are done.
+- You must comply with Cloudflare's terms of service. Any consequence of using this project
+  (including but not limited to domain recycling, tunnel limits, outages, or data exposure) is
+  your own responsibility.
+- The author accepts no liability for direct or indirect loss arising from the use or misuse of
+  this project.
+- This project is not affiliated with, nor endorsed by, Cloudflare or DeepSeek. Names appear only
+  to describe compatibility; trademarks remain with their respective owners.
+
 ## Not done yet
 
 - **Fixed custom domain**: needs a named tunnel + ingress. Today every start gets a random
@@ -227,12 +298,16 @@ python -X utf8 test\acceptance_portal.py    # 30 checks
 - **Auto-download of cloudflared**: we reuse the local copy (dsh-pocket downloads it from mirrors).
 - **Periodic health refresh**: liveness is probed on page refresh, not by a background timer.
 
-## Credits
+## Acknowledgements
 
-The **portal shape** of this project (console web page, internal + external entrances, authentication
-strength decided by Host class) explicitly follows:
+This project builds on work others have published. Sources and licences are credited honestly
+below:
 
-### [shaobeichen/dsh-pocket](https://github.com/shaobeichen/dsh-pocket)
+### The connection kernel reference
+
+The **portal shape** of this project (console web page, internal + external entrances,
+authentication strength decided by Host class) explicitly follows
+[shaobeichen/dsh-pocket](https://github.com/shaobeichen/dsh-pocket):
 
 > "Put DeepSeek Harness in your pocket: one package, one settings page, scan a QR code on your phone
 > to reach the DSH on your computer (LAN + public, live mirror)." — GPL-2.0
@@ -267,12 +342,37 @@ We credit it and state its licence anyway — out of respect, and so readers can
 ### Others
 
 - [cloudflared](https://github.com/cloudflare/cloudflared) (Apache-2.0) — the public tunnel.
+### The plugin-presentation baseline
+
+- [dingminhua/dsh-connect-workbuddy](https://github.com/dingminhua/dsh-connect-workbuddy)
+  (MIT, Copyright (c) 2026 LaoDing) — the plugin presents itself the same way: settings-card
+  structure and interactions, the read-only host↔client route shape, the `dsh.bundle` manifest
+  and the npm release setup. The **brand icon** (`client/icon.ts`, an inline 64px data URI) is
+  **byte-for-byte identical** so the family looks consistent.
+- [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae) (MIT) and
+  [dingminhua/dsh-subagent-default-model](https://github.com/dingminhua/dsh-subagent-default-model)
+  (MIT) — origin of the `dsm-*` card style system and the `row.*` bilingual copy keys, via
+  `dsh-connect-workbuddy`.
+
+### Other
+
+- [cloudflared](https://github.com/cloudflare/cloudflared) (Apache-2.0) — the public tunnel.
 - [mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile) (MIT) — dsh-pocket's mobile
   adaptation was ported from it; we do not use it directly, but the mobile design originates there.
-- The family card styling and brand icon come from sibling plugins such as
-  `dingminhua/dsh-connect-workbuddy`.
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list and licence requirements.
+### Note
+
+Copyright in the projects above belongs to their respective authors. This project takes the
+approach of **borrowing design ideas while implementing independently**; no reference project's
+source was copied wholesale. Key modules are written from scratch and name the specific project
+and pattern they reference in their file headers. If you find an omission or misattribution,
+please open an issue and we will correct it immediately.
+
+## Third-party open-source dependencies
+
+The open-source projects this project references, their licences and compliance notes are recorded
+in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). When adding a new external dependency or
+reusing code from another project, update that file and honour the corresponding licence.
 
 ## License
 

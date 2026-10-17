@@ -10,7 +10,7 @@
   <a href="README.en.md">English</a> ·
   <a href="#安装">安装</a> ·
   <a href="#工作原理">工作原理</a> ·
-  <a href="#服务清单">服务清单</a> ·
+  <a href="#在插件设置里管理节点">节点管理</a> ·
   <a href="CHANGELOG.md">更新日志</a> ·
   <a href="https://github.com/dingminhua/dsh-service-portal/issues">问题反馈</a>
 </p>
@@ -466,6 +466,66 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
 > 已将其功能**吸收进根插件**成为通用门户能力（服务清单驱动，不绑定任何具体服务），
 > 子插件目录已删除。
 
+## 市场收录与展示
+
+插件已包含可安装的 `dsh.bundle` manifest，并发布到 npm。社区市场通常从
+[Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+注册表同步条目；仓库内的提交草稿位于
+[`awesome-dsh-plugin-submission/dingminhua__dsh-service-portal.yml`](https://github.com/dingminhua/dsh-service-portal/blob/main/awesome-dsh-plugin-submission/dingminhua__dsh-service-portal.yml)。
+
+> 上面这个链接用 GitHub 绝对地址，不是相对路径 —— `awesome-dsh-plugin-submission/`
+> 与 `screenshots.json` **不在 `package.json` 的 `files` 白名单里**（它们只服务于
+> 仓库与收录流程，不该进 npm 包）。用相对路径的话，npm 页面上的链接会 404。
+
+**收录目录规范**（依据 Awesome DSH Plugin 的 `contributing.md`）：
+
+- 每个插件一个 YAML：`data/plugins/<owner>__<repo>.yml`，字段为 `url`（与仓库地址完全一致）、
+  `name`（`owner/repo`）、`category`（有效值之一，本项目为 `remote`）、
+  `description.en`（必填，以句号结尾）/ `description.zh`（可选）；描述中含 `: ` 必须加引号。
+- 仓库必须声明 `dsh.bundle` manifest（本项目 `dsh.bundle.patch: ./cordis.patch.yml`），
+  且被 `dsh-plugin` topic 标记；提交数 ≥ 10、仓库满 1 天由 CI 自动检查。
+- 一个 PR 最多收录 3 条；只改自己的条目，不动其他插件。
+
+市场卡片中的截图与 GitHub README 徽章是两套机制：
+
+- **GitHub 徽章**由本 README 顶部的 Shields 图片链接生成。
+- **市场截图**按当前约定由插件自己仓库根目录的
+  [`screenshots.json`](https://github.com/dingminhua/dsh-service-portal/blob/main/screenshots.json)
+  声明，注册表 `data/screenshots.json` 是旧约定下的回退，不再添加新键。
+- **市场图标/占位图**由具体市场的展示规则决定，并不是 npm `package.json` 的通用字段，
+  也不是 README 徽章。
+
+## 已知限制
+
+- **随机域名，不固定**：每次启动都是一次性的 `*.trycloudflare.com`，关闭或重启后失效，
+  且可能被他人复用为陌生网站。需要**固定自有域名**得用 named tunnel + ingress，本插件不支持。
+  界面因此反复提醒「请勿收藏，每次从本页扫当前二维码」。
+- **cloudflared 要自己装**：本项目复用本机已有的那份，**不会自动下载**
+  （同族的 dsh-pocket 会多镜像源下载）。找不到时「开启公网访问」会直接失败并说明原因。
+- **存活探测只在刷新时发生**：门户页与设置页打开时探一次上游端口，没有后台定时器，
+  所以一个服务刚挂掉时，页面可能要刷新一次才会变「上游未响应」。
+- **公网可达性受 quick tunnel 与 Cloudflare 边缘影响**：DNS 传播可能需要几秒到几十秒，
+  `check_portal_tunnel.py` 会等传播完成再判定；失败时先看 cloudflared 日志再怀疑插件。
+- **内网免密是默认值，不是安全建议**：同一 WiFi 下任何设备无需口令即可打开门户。在不可信的
+  网络上请打开「局域网访问密码」。这是刻意的取舍（扫码即用的便利），界面已如实说明。
+- **Node ≥ 22 与宿主 API 版本**：插件依赖 DSH 提供的 `webServer` / `settings` 能力；
+  宿主缺这些能力时插件会 fail-closed（不挂路由），而不是半残运行。
+- **Windows / macOS / Linux 均已验证**：但 `cloudflared` 的探测路径按平台与常见安装位置推导，
+  若你的安装位置不在候选内，需通过配置项显式指定。
+
+## 免责声明
+
+- 本项目**仅供个人学习和研究使用**，仅用于把**你自己拥有或有权访问**的本机服务对外提供，
+  请勿用于商业用途或超出个人合理使用的场景。
+- **公网暴露是你自己的决定，风险自担**。开启公网访问后，任何拿到该地址与口令的人都能访问
+  你发布的节点（能增删、开放或屏蔽节点，但动不了上游程序）。请勿在公网长期暴露管理口令，
+  用完后及时「关闭公网」。
+- 使用者需遵守 Cloudflare 的服务条款；因使用本项目产生的任何后果（包括但不限于域名被回收、
+  隧道被限制、服务中断、数据暴露），由使用者自行承担。
+- 本项目作者不对任何因使用或滥用本项目产生的直接或间接损失负责。
+- 本项目与 Cloudflare、DeepSeek 均无关联，未获其授权或认可；文中出现的名称仅用于描述
+  兼容关系，其商标权利归各自所有。
+
 ## 未做
 
 - **固定自有域名**：需要 named tunnel + ingress。现在每次启动都是随机 trycloudflare 域名。
@@ -474,9 +534,12 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
 
 ## 致谢
 
-本项目的**门户形态**（门户网页、内网+外网双入口、按 Host 分类的认证强度）明确参照了：
+本项目的实现建立在他人已公开的工作之上。以下内容如实标注来源与许可证，我们对此保持充分尊重：
 
-### [shaobeichen/dsh-pocket](https://github.com/shaobeichen/dsh-pocket)
+### 连接内核的参照
+
+本项目的**门户形态**（门户网页、内网+外网双入口、按 Host 分类的认证强度）明确参照了
+[shaobeichen/dsh-pocket](https://github.com/shaobeichen/dsh-pocket)：
 
 > 「把 DeepSeek Harness 装进你的口袋：一个包、一个设置页，手机扫码即同步访问电脑上的
 > DSH（局域网 + 公网，实时同屏）。」 —— GPL-2.0
@@ -508,14 +571,34 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
 > 如果将来要在本项目里**直接搬运它的代码**，那就必须整体转为 GPL-2.0 ——
 > 请勿在未确认的情况下混入其源码片段。
 
+### 插件呈现与结构的基线
+
+- [dingminhua/dsh-connect-workbuddy](https://github.com/dingminhua/dsh-connect-workbuddy)
+  （MIT，Copyright (c) 2026 LaoDing）— 插件的呈现方式与其保持一致：设置卡片的结构与交互、
+  只读的 host↔client 路由形态、`dsh.bundle` manifest 与 npm 发布工程。**品牌图标**
+  （`client/icon.ts` 内联的 64px data URI）与其**逐字节相同**，为的是同族插件外观一致。
+- [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae)（MIT，
+  Copyright (c) 2026 LaoDing）、[dingminhua/dsh-subagent-default-model](https://github.com/dingminhua/dsh-subagent-default-model)
+  （MIT，Copyright (c) 2026 LaoDing）— `dsm-*` 卡片风格体系与 `row.*` 双语文案键约定的来源，
+  经 `dsh-connect-workbuddy` 转引。
+
 ### 其他
 
 - [cloudflared](https://github.com/cloudflare/cloudflared)（Apache-2.0）—— 公网隧道。
 - [mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT）——
   dsh-pocket 的移动端适配移植自它，本项目未直接使用，但移动端设计的源头在此。
-- 插件家族的卡片样式与品牌图标来自 `dingminhua/dsh-connect-workbuddy` 等同族插件。
 
-完整的第三方清单与许可要求见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+### 说明
+
+以上项目的版权归各自作者所有。本项目采用**借鉴设计思路 + 独立实现**的方式，未整体复制任何
+参考项目的源码；关键模块均为独立编写，并在源文件头部注释中标注了所参考的具体项目与模式。
+若你发现本项目的标注有遗漏或不当之处，请提交 issue，我们会立即更正。
+
+## 第三方开源依赖
+
+本项目参考的开源项目、其许可证与合规说明，完整记录见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。引入新的外部依赖或复用其他项目代码时，
+请同步更新该文件并遵守对应许可证要求。
 
 ## 许可证
 
