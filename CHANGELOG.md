@@ -1,5 +1,89 @@
 # Changelog
 
+## 1.0.2 (2026-10-20)
+
+**修复深色主题下按钮变成白色方块。** 纯样式修复，无行为契约变更
+（1.0.0 冻结的 13 条承诺原样保留）。
+
+### 症状
+
+深色主题下，「访问」「内网访问」「添加节点」等主按钮只剩一个纯白矩形，
+文字完全看不见；两个开关的圆形滑钮同样变白。浅色主题一切正常。
+
+### 根因：写死的文字色压在会随主题翻转的背景令牌上
+
+```css
+.dsp-btn-primary{background:var(--dsw-alias-brand-primary,#111318);
+  color:#fff}
+```
+
+宿主的 `--dsw-alias-brand-primary` 语义是"**最高对比度的前景色**"，
+它两套主题取值**相反**：
+
+| 主题 | 该令牌 | 解析值 |
+| --- | --- | --- |
+| 浅色 | `--dsw-static-neutral-bluish-1000` | `#0f1115`（近黑） |
+| 深色 | `--dsw-static-neutral-bluish-50` | `#f9fafb`（近白） |
+
+于是深色下是 `#f9fafb` 底 + `#fff` 字，对比度约 **1.02:1** —— 文字并没有
+消失，是白压白，视觉上只剩一个白色方块。危险按钮「删除」保持红字可见，
+所以现象看起来像是"只有部分按钮坏了"。
+
+### 修复：与宿主一样成对取令牌
+
+宿主自己的 `.button.primary` 就是成对使用的（`button-primary-fill` +
+`label-primary-foreground`），换主题时底色和字色一起翻转，永不失配。
+本插件此前只抄了底色、字色写死。
+
+| 位置 | 改前 | 改后 |
+| --- | --- | --- |
+| 主按钮字色 | `#fff` 写死 | `--dsw-alias-label-primary-foreground`（浅 `#fff` / 深 `#0f1115`） |
+| 主按钮底色 | `--dsw-alias-brand-primary` | `--dsw-alias-button-primary-fill`（同值，语义更准） |
+| 主按钮 hover | `filter:brightness(1.08)` | `--dsw-alias-button-primary-hover`（浅 `#43454a` / 深 `#ebeef2`） |
+| 开关圆钮 | `#fff` 写死 | `--dsw-alias-switch-thumb`（浅 `#fff` / 深 `#adb2b8`） |
+| 开关轨道 | `--dsw-alias-border-l2` | `--dsw-alias-border-l3`（宿主 Switch 用的就是它） |
+
+> 开关圆钮不能借用主按钮的字色令牌：关态轨道是半透明白叠在深色底上，
+> 换成深色钮会与轨道糊在一起。宿主为此专门定义了 `switch-thumb`。
+
+### 同时修正：注释与实现相矛盾的内嵌底色
+
+`--dsp-inset` 的注释早已写明"不要用 `bg-layer-2`，浅色主题里
+`bg-layer-1/2/3` 都是同一个白"，但**下一行代码仍指向 `bg-layer-2`**，
+这条教训一直没生效。
+
+| 变量 | 改前 | 改后 | 浅色 | 深色 |
+| --- | --- | --- | --- | --- |
+| `--dsp-inset` | `bg-layer-2` | `interactive-bg-hover` | `#2631480f` | `#ffffff14` |
+| `--dsp-inset-solid` / `--dsp-chip` | `bg-layer-2` | `interactive-bg-hover-solid` | `#f1f3f5` | `#353638` |
+| `--dsp-surface` | `bg-layer-2` | `bg-layer-1` | `#fff` | `#232324` |
+
+`inset` 改后的值正好等于注释里手算的期望值 `rgba(38,49,72,.06)` /
+`rgba(255,255,255,.08)` —— 作者算对了，只是令牌名写错。
+
+另将弹窗肯定语气的标题色由 `brand-primary` 改为 `--dsp-ok`：前者在深色下
+会变成近白，语义随之丢失，且与相邻的 `--dsp-warn`（真正的语义色）不成对。
+
+### 为什么开发阶段一直没发现：预览工具本身在骗人
+
+`tools/render_panel_preview.mjs` 里是**手写**的假主题变量，
+`--dsw-alias-brand-primary` 被填成 `#4f6ef7`（蓝），而宿主深色下实际是
+`#f9fafb`。所以预览里主按钮永远是蓝底白字、始终正常。
+
+现已换成从宿主 `dsh-client-ui-theme`（`body{...}` 与
+`body[data-ds-dark-theme]{...}`）逐条提取的 **18 个真实令牌**。换完之后
+立刻复现了用户截图里的白块，修复后再验证。
+
+### 测试
+
+- 新增「主题成对：会翻转的背景令牌不得配写死的文字色」：凡 `background`
+  使用了会翻转的令牌（`brand-primary` / `button-primary-fill` /
+  `bg-layer-*`），`color` 就必须同样取自配套前景令牌。
+- 该检验带**反证**：回到 1.0.1 的代码上运行会精确报出
+  `.dsp-btn-primary → background 用 var(--dsw-alias-brand-primary,#111318) 但 color=#fff`，
+  证明它不是永远通过的空转。
+- 全量 118 项通过（含 4 项宿主门禁检验，0 跳过）。
+
 ## 1.0.1 (2026-10-17)
 
 **跟进 DSH 0.2.1-rc.1 的清单规范。** 没有任何行为契约变更（1.0.0 冻结的

@@ -709,3 +709,64 @@ test("渲染：运行中状态下面板不再出现「门户进程 / 停止门�
   // 「关闭公网访问」是**另一件事**（只收隧道），必须还在 —— 别连带删错
   assert.ok(text.includes("公网"), "公网那一栏不该被误删");
 });
+
+// ---------------------------------------------------------------------------
+// 主题成对性：**写死的颜色不许压在会随主题翻转的令牌上**。
+//
+// 拦的是这个真实 bug（用户截图报"按钮都有白色一块一块的"）：
+//   .dsp-btn-primary{background:var(--dsw-alias-brand-primary); color:#fff}
+// 宿主的 --dsw-alias-brand-primary 语义是"最高对比度的前景色"，两套主题**取值
+// 相反**：浅色 bluish-1000(#0f1115 近黑) / 深色 bluish-50(#f9fafb 近白)。
+// 于是深色下是 #f9fafb 底 + #fff 字，对比度约 1.02:1 —— 文字没消失，是白压白，
+// 视觉上只剩一个白色方块。它只在深色主题触发，浅色下的所有预览与人工核对都
+// 看不见，所以必须由机器盯住。
+//
+// 规则：凡是 background 用了"会翻转"的令牌（brand-primary / button-primary-fill
+// / 各 bg-layer-*），color 就必须**同样**取自配套的前景令牌
+// （label-primary-foreground / label-primary / label-inverse），不许写死 #fff。
+// 开关的 thumb 不在此列 —— 它用宿主专用的 --dsw-alias-switch-thumb。
+// ---------------------------------------------------------------------------
+test("主题成对：会翻转的背景令牌不得配写死的文字色", () => {
+  // 抽出所有含 background 且含 color 的规则块
+  const blocks = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(source))) blocks.push({ sel: m[1].trim(), body: m[2] });
+
+  const flipping = [
+    "--dsw-alias-brand-primary",
+    "--dsw-alias-button-primary-fill",
+    "--dsw-alias-bg-layer-1",
+    "--dsw-alias-bg-layer-2",
+    "--dsw-alias-bg-layer-3",
+  ];
+  const foreground = [
+    "--dsw-alias-label-primary-foreground",
+    "--dsw-alias-label-primary",
+  ];
+  const bad = [];
+  for (const { sel, body } of blocks) {
+    const bg = /background(?:-color)?\s*:\s*([^;]+)/.exec(body);
+    const fg = /(?:^|;)\s*color\s*:\s*([^;]+)/.exec(body);
+    if (!bg || !fg) continue;
+    if (!flipping.some((t) => bg[1].includes(t))) continue;
+    const colorVal = fg[1].trim();
+    const isForegroundToken = foreground.some((t) => colorVal.includes(t));
+    const isInherit = /^(inherit|currentcolor)$/i.test(colorVal);
+    if (!isForegroundToken && !isInherit) {
+      bad.push(`${sel} → background 用 ${bg[1].trim()} 但 color=${colorVal}`);
+    }
+  }
+  assert.deepEqual(bad, [],
+    "以下规则把写死的文字色压在会随主题翻转的背景令牌上（深色主题会白底白字）：\n"
+    + bad.join("\n"));
+
+  // 反证：本条检验必须真的能抓到 bug —— 否则它可能是永远通过的空转
+  const fake = ".x{background:var(--dsw-alias-brand-primary);color:#fff}";
+  const m2 = /([^{}]+)\{([^{}]*)\}/.exec(fake);
+  const bg2 = /background(?:-color)?\s*:\s*([^;]+)/.exec(m2[2]);
+  const fg2 = /(?:^|;)\s*color\s*:\s*([^;]+)/.exec(";" + m2[2]);
+  assert.ok(bg2 && fg2 && flipping.some((t) => bg2[1].includes(t))
+    && !foreground.some((t) => fg2[1].trim().includes(t)),
+    "反证失败：这条检验抓不到经典的 brand-primary + #fff 组合，等于空转");
+});

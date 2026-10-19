@@ -161,16 +161,29 @@ function page(stateKey, dark, view, click) {
 <title>panel-${stateKey}${dark ? "-dark" : ""}</title><style>
   body { margin:0; padding:22px; background:${dark ? "#0b0d11" : "#eceef2"};
          font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
-    --dsw-alias-bg-layer-1:${dark ? "#1a1d23" : "#fff"};
-    --dsw-alias-bg-layer-2:${dark ? "#23262d" : "#f3f4f6"};
-    --dsw-alias-border-l2:${dark ? "#33373f" : "#e5e7eb"};
-    --dsw-alias-brand-primary:${dark ? "#6b86ff" : "#4f6ef7"};
-    --dsw-alias-label-primary:${dark ? "#f2f4f8" : "#111827"};
-    --dsw-alias-label-secondary:${dark ? "#a4abb8" : "#6b7280"};
-    --dsw-alias-state-error-primary:${dark ? "#f87171" : "#dc2626"};
-    --dsw-alias-state-idle-primary:${dark ? "#6b7280" : "#9ca3af"};
-    --dsw-alias-state-success-primary:${dark ? "#4ade80" : "#16a34a"};
-    --dsw-alias-state-warn-primary:${dark ? "#fbbf24" : "#b45309"}; }
+    /* 以下令牌**逐条取自宿主 dsh-client-ui-theme 的真实定义**
+       （body{...} 与 body[data-ds-dark-theme]{...}），不是手写近似值。
+       手写值让预览看不见真 bug：brand-primary 曾被填成 #4f6ef7/#6b86ff（蓝），
+       而宿主深色下其实是 #f9fafb —— 预览里主按钮永远正常，真实面板却白底白字。
+       预览骗人比没有预览更糟。 */
+    --dsw-alias-bg-layer-1:${dark ? "#232324" : "#fff"};
+    --dsw-alias-bg-layer-2:${dark ? "#2c2c2e" : "#fff"};
+    --dsw-alias-border-l2:${dark ? "#ffffff1f" : "#0000001a"};
+    --dsw-alias-border-l3:${dark ? "#ffffff29" : "#0000001f"};
+    --dsw-alias-brand-primary:${dark ? "#f9fafb" : "#0f1115"};
+    --dsw-alias-button-primary-fill:${dark ? "#f9fafb" : "#0f1115"};
+    --dsw-alias-button-primary-hover:${dark ? "#ebeef2" : "#43454a"};
+    --dsw-alias-label-primary:${dark ? "#f9fafb" : "#0f1115"};
+    --dsw-alias-label-secondary:${dark ? "#cfd3d6" : "#61666b"};
+    --dsw-alias-label-primary-foreground:${dark ? "#0f1115" : "#fff"};
+    --dsw-alias-state-error-primary:${dark ? "#f25a5a" : "#ec1313"};
+    --dsw-alias-state-idle-primary:${dark ? "#545557" : "#d4d4d4"};
+    --dsw-alias-state-success-primary:${dark ? "#22c55e" : "#22c55e"};
+    --dsw-alias-state-warn-primary:${dark ? "#f59e0b" : "#f59e0b"};
+    --dsw-alias-switch-thumb:${dark ? "#adb2b8" : "#fff"};
+    --dsw-alias-interactive-bg-hover:${dark ? "#ffffff14" : "#2631480f"};
+    --dsw-alias-interactive-bg-hover-solid:${dark ? "#353638" : "#f1f3f5"};
+    --dsw-alias-bg-base:${dark ? "#151517" : "#fff"} };
 </style></head><body><div id="root"></div>
 <script>
 const STATE = ${JSON.stringify(state)};
