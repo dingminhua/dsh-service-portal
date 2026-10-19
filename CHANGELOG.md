@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.0.3 (2026-10-20)
+
+**修复 1.0.2 的打包卫生回归：`__pycache__` 混进了 npm 包。**
+
+### 症状
+
+`npm install dsh-service-portal@1.0.2` 后，包里多出三个文件：
+
+```
+tools/__pycache__/portal_login.cpython-312.pyc
+tools/__pycache__/start_public_gui.cpython-312.pyc
+tools/__pycache__/tunnel_auth.cpython-312.pyc
+```
+
+这些 `.pyc` 内嵌了打包机器上的**绝对路径**
+（`/Users/dmh2002/DshProject/dsh-service-portal/tools/...`），
+违反本项目「发货代码里不得出现作者本机目录名」的发布纪律。
+1.0.0 与 1.0.1 的包内都没有这个问题，属于 1.0.2 引入的回归。
+
+### 根因：files 白名单匹配整个目录，而 npm 不看 .gitignore
+
+- `package.json` 的 `files` 里写的是 `"tools"`，它匹配的是**整个目录**。
+- `.gitignore` 里**有** `__pycache__/` 与 `*.pyc`，git 也确实没跟踪它们，
+  所以提交历史是干净的 —— 但 **npm 打包时根本不读 `.gitignore`**，
+  它只看 `files` 与 `.npmignore`。
+- 发布前跑 `check_*.py` 系列检验时，Python 生成了 `tools/__pycache__/`，
+  于是被原样打进包里。
+
+### 修复
+
+新增 `tools/.npmignore`：
+
+```
+__pycache__/
+*.pyc
+```
+
+> 注意位置很重要：**根目录**的 `.npmignore` 对已被 `files` 列出的目录
+> **无效**（实测仍会打包 3 个 `.pyc`）；只有 `files` 白名单目录**内部**的
+> `.npmignore` 才生效。这一点已写进 `.npmignore` 与测试的注释里。
+
+包内文件数由 51 降为 **48**，35 个 Python 脚本与两个运行期入口
+（`portal_run.py`、`start_public_gui.py`）全部保留 —— 已逐一核对。
+
+### 测试
+
+新增「打包卫生：npm 包内不得出现 `__pycache__` / `*.pyc` / 编辑器杂项」：
+
+- 用 `npm pack --dry-run --json` 的**真实文件清单**判定，不靠推断。
+- 附两个方向的把关：既禁止缓存文件进包，也断言两个运行期入口**仍在包里**
+  （防止为了"干净"把 `tools` 整个排除——那正是 v0.8.6 踩过的坑）。
+- 带反证：删掉 `tools/.npmignore` 后运行，该检验会精确报出那 3 个 `.pyc`。
+- 全量 119 项通过（含 4 项宿主门禁，0 跳过）。
+
 ## 1.0.2 (2026-10-20)
 
 **修复深色主题下按钮变成白色方块。** 纯样式修复，无行为契约变更

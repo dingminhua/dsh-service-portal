@@ -16,6 +16,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -1426,4 +1427,44 @@ test("随 DSH 开关：apply() 把收尾挂到 dispose 与信号上（不是只�
   // 收尾要只针对"自己起的"门户，不能误杀用户手动起的调试进程
   assert.ok(src.includes("Number(status.portalPid) !== Number(ownedPid)"),
     "必须按 pid 判归属，否则会误杀用户手动起的门户");
+});
+
+// ---------------------------------------------------------------------------
+// 打包卫生：运行期缓存与编辑器杂项**不得进 npm 包**。
+//
+// 拦的是 1.0.2 的回归（1.0.0 / 1.0.1 都干净）：
+//   package.json 的 files 白名单里 "tools" 匹配的是**整个目录**，而 npm 打包
+//   时根本不看 .gitignore（它只看 files 与 .npmignore）。于是本地跑过一次
+//   check_*.py 之后生成的 tools/__pycache__/*.pyc 就被一起打了进去 ——
+//   这些 .pyc 内嵌了打包机器上的绝对路径（/Users/<作者名>/DshProject/...），
+//   直接违反本项目「发货代码里不得出现作者本机目录名」的发布纪律。
+//
+// 修法是 tools/.npmignore（files 白名单目录**内部**的 .npmignore 才生效；
+// 根目录那个对已列入 files 的目录无效——实测两边都验证过）。
+// 这条检验用 npm pack --dry-run 的真实清单判断，不靠推断。
+// ---------------------------------------------------------------------------
+test("打包卫生：npm 包内不得出现 __pycache__ / *.pyc / 编辑器杂项", () => {
+  // --ignore-scripts：prepack 会跑 client/build.mjs 并往 stdout 打印
+  // "Wrote /path/..."，那行会污染 --json 的输出（实测 JSON.parse 直接炸）。
+  // 这里只关心文件清单，不需要触发构建。
+  const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: ROOT, encoding: "utf8", timeout: 180000,
+  });
+  // 兜底：只在确有前缀噪音时才截取，且必须从数组的 "[" 开始（从第一个 "{"
+  // 截会砍掉外层数组，JSON.parse 报 "Unexpected non-whitespace character"）。
+  const start = out.search(/\[|\{/);
+  const parsed = JSON.parse(out.slice(start));
+  const files = (parsed[0] && parsed[0].files || []).map((f) => f.path);
+  assert.ok(files.length > 0, "npm pack 没有列出任何文件，本检验会变成空转");
+
+  const bad = files.filter((p) =>
+    p.includes("__pycache__") || p.endsWith(".pyc") || p.endsWith(".pyo")
+    || p.includes(".DS_Store") || p.endsWith(".swp"));
+  assert.deepEqual(bad, [], "npm 包里混进了不该发的东西：\n" + bad.join("\n"));
+
+  // 反证：运行期入口必须仍在包里（别为了"干净"把 tools 整个排除掉）
+  assert.ok(files.some((p) => p.endsWith("tools/portal_run.py")),
+    "tools/portal_run.py 不在包里 —— 排除规则误伤了运行期入口");
+  assert.ok(files.some((p) => p.endsWith("tools/start_public_gui.py")),
+    "tools/start_public_gui.py 不在包里 —— 排除规则误伤了运行期入口");
 });
