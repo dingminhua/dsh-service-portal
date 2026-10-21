@@ -1442,19 +1442,31 @@ test("随 DSH 开关：apply() 把收尾挂到 dispose 与信号上（不是只�
 // 修法是 tools/.npmignore（files 白名单目录**内部**的 .npmignore 才生效；
 // 根目录那个对已列入 files 的目录无效——实测两边都验证过）。
 // 这条检验用 npm pack --dry-run 的真实清单判断，不靠推断。
+//
+// 想做反证时必须**先真的造出 tools/__pycache__/*.pyc**：
+//   mkdir -p tools/__pycache__ && touch tools/__pycache__/x.cpython-312.pyc
+// 然后临时移走 tools/.npmignore，该检验才会红。本地默认已经清理干净，
+// 直接移走 .npmignore 跑一遍会"通过"—— 那是空转，不能当作反证。
 // ---------------------------------------------------------------------------
 test("打包卫生：npm 包内不得出现 __pycache__ / *.pyc / 编辑器杂项", () => {
   // --ignore-scripts：prepack 会跑 client/build.mjs 并往 stdout 打印
   // "Wrote /path/..."，那行会污染 --json 的输出（实测 JSON.parse 直接炸）。
   // 这里只关心文件清单，不需要触发构建。
+  // Windows 上 npm 是 npm.cmd，execFileSync 不走 shell 会直接 ENOENT
+  // （CI 在 windows-latest 上就是这么红的：spawnSync npm ENOENT）。
+  // 非 Windows 保持不开 shell，避免无谓的 shell 注入面与转义麻烦。
   const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: ROOT, encoding: "utf8", timeout: 180000,
+    shell: process.platform === "win32",
   });
   // 兜底：只在确有前缀噪音时才截取，且必须从数组的 "[" 开始（从第一个 "{"
   // 截会砍掉外层数组，JSON.parse 报 "Unexpected non-whitespace character"）。
   const start = out.search(/\[|\{/);
   const parsed = JSON.parse(out.slice(start));
-  const files = (parsed[0] && parsed[0].files || []).map((f) => f.path);
+  // 统一成正斜杠：npm 在 Windows 上也可能给出反斜杠路径，
+  // 下面按 "tools/portal_run.py" 这类片段比较，不归一化会漏判。
+  const files = (parsed[0] && parsed[0].files || [])
+    .map((f) => String(f.path).replace(/\\/g, "/"));
   assert.ok(files.length > 0, "npm pack 没有列出任何文件，本检验会变成空转");
 
   const bad = files.filter((p) =>
