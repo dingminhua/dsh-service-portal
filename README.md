@@ -177,6 +177,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 | `infraPath` | 本仓库根 | 基础设施仓库：含 `tools/` 与 `runs/`（隧道/代理/凭据） |
 | `repoPath` | **空** | 宿主仓库根：被开放的服务本体在这里。**必须自己填** |
 | `pythonPath` | 空 | 拉服务用的解释器；留空则自动选 `.venv313` → `.runtime` → PATH |
+| `cloudflaredPath` | 空 | `cloudflared` 可执行文件路径；留空则自动探测（`~/.dsh/dsh-pocket/bin` → `~/.dsh/bin` → `~/.local/bin` → `/usr/local/bin` → `/opt/homebrew/bin` → PATH）|
 | `passwordMode` | `random` | 口令形态：`random` 每次开启自动生成 / `fixed` 用固定口令 |
 | `fixedPassword` | 空 | `passwordMode = fixed` 时使用，至少 12 字符（保存时即校验） |
 | `portalPort` | `8899` | 门户端口。只接受 1–65535 的整数，非法值回落默认 |
@@ -520,17 +521,20 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
   且可能被他人复用为陌生网站。需要**固定自有域名**得用 named tunnel + ingress，本插件不支持。
   界面因此反复提醒「请勿收藏，每次从本页扫当前二维码」。
 - **cloudflared 要自己装**：本项目复用本机已有的那份，**不会自动下载**
-  （同族的 dsh-pocket 会多镜像源下载）。找不到时「开启公网访问」会直接失败并说明原因。
+  （同族的 dsh-pocket 会多镜像源下载）。装好插件后在设置页**就会看到缺什么、怎么装**：
+  `GET /status` 带出 `prereqs` 检测结果，缺 Python 3 时两个启动按钮直接禁用（内网也起不来），
+  缺 cloudflared 时只有「启动并开公网」禁用、「启动（只内网）」照常可点。
 - **存活探测只在刷新时发生**：门户页与设置页打开时探一次上游端口，没有后台定时器，
   所以一个服务刚挂掉时，页面可能要刷新一次才会变「上游未响应」。
 - **公网可达性受 quick tunnel 与 Cloudflare 边缘影响**：DNS 传播可能需要几秒到几十秒，
   `check_portal_tunnel.py` 会等传播完成再判定；失败时先看 cloudflared 日志再怀疑插件。
 - **内网免密是默认值，不是安全建议**：同一 WiFi 下任何设备无需口令即可打开门户。在不可信的
   网络上请打开「局域网访问密码」。这是刻意的取舍（扫码即用的便利），界面已如实说明。
-- **Node ≥ 22 与宿主 API 版本**：插件依赖 DSH 提供的 `webServer` / `settings` 能力；
+- **Node ≥ 24 与宿主 API 版本**：插件依赖 DSH 提供的 `webServer` / `settings` 能力；
   宿主缺这些能力时插件会 fail-closed（不挂路由），而不是半残运行。
-- **Windows / macOS / Linux 均已验证**：但 `cloudflared` 的探测路径按平台与常见安装位置推导，
-  若你的安装位置不在候选内，需通过配置项显式指定。
+- **Windows / macOS / Linux 均已验证**：`cloudflared` 的探测路径按平台与常见安装位置推导，
+  若你的安装位置不在候选内，在设置页填 `cloudflaredPath` 即可显式指定
+  （填了不存在的路径时，设置页会明确说是"填错了"而不是"没装"，两者要分别处理）。
 
 ## 免责声明
 

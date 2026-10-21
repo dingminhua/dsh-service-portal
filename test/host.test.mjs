@@ -24,7 +24,10 @@ import { createServer as createHttpServer } from "node:http";
 
 import { _internals, Config, name, apply } from "../lib/index.js";
 
-const { configOf, pythonFor, readStatus, portListening, passwordArgs } = _internals;
+const {
+  configOf, pythonFor, readStatus, portListening, passwordArgs,
+  checkPrereqs, cloudflaredCandidates, whichOnPath,
+} = _internals;
 
 /** 仓库根（用于按源码做启动方式回归）。 */
 const ROOT = resolve(import.meta.dirname, "..");
@@ -1479,4 +1482,166 @@ test("打包卫生：npm 包内不得出现 __pycache__ / *.pyc / 编辑器杂�
     "tools/portal_run.py 不在包里 —— 排除规则误伤了运行期入口");
   assert.ok(files.some((p) => p.endsWith("tools/start_public_gui.py")),
     "tools/start_public_gui.py 不在包里 —— 排除规则误伤了运行期入口");
+});
+
+// ===========================================================================
+// 前置条件检测（checkPrereqs）与 cloudflaredPath 透传
+//
+// 背景（用户反馈）：插件装好后**什么都不说**，用户在设置页点「启动并开公网」
+// 才失败，只看到一句"找不到 cloudflared"。同时 README「已知限制」里写着
+// 「若你的安装位置不在候选内，需通过配置项显式指定」—— 但 Config 里
+// 从来没有那个配置项。两处一并修：检测提前 + 配置补齐。
+// ---------------------------------------------------------------------------
+
+test("Config：cloudflaredPath 字段存在且默认空（交给自动探测）", () => {
+  const cfg = configOf({});
+  assert.equal(typeof cfg.cloudflaredPath, "string");
+  assert.equal(cfg.cloudflaredPath, "",
+    "默认必须是空串 —— 空 = 由门户脚本按平台自动探测");
+});
+
+test("configOf：cloudflaredPath 会被裁掉两端空白", () => {
+  const cfg = configOf({ cloudflaredPath: { get: () => "  /usr/local/bin/cloudflared  " } });
+  assert.equal(cfg.cloudflaredPath, "/usr/local/bin/cloudflared");
+});
+
+test("checkPrereqs：返回结构固定（前端不必猜字段是否存在）", () => {
+  const r = checkPrereqs(configOf({}));
+  for (const key of ["ok", "python", "cloudflared", "missing"]) {
+    assert.ok(key in r, `checkPrereqs 结果必须恒有 ${key} 字段`);
+  }
+  assert.equal(typeof r.ok, "boolean");
+  assert.ok(Array.isArray(r.missing));
+  for (const key of ["ok", "path", "detail"]) {
+    assert.ok(key in r.python, `python 段必须恒有 ${key}`);
+    assert.ok(key in r.cloudflared, `cloudflared 段必须恒有 ${key}`);
+  }
+});
+
+test("checkPrereqs：填了不存在的 cloudflared 路径 → 明确说「填错」而不是「没装」", () => {
+  // 这两种错的修法完全不同：一个是"去装一个"，一个是"改掉你填错的路径"。
+  // 混成一句话会让用户照错误的方向折腾。
+  const r = checkPrereqs(configOf({ cloudflaredPath: { get: () => "/definitely/not/here" } }));
+  assert.equal(r.cloudflared.ok, false);
+  assert.ok(r.cloudflared.detail.includes("/definitely/not/here"),
+    "报错必须带上用户填的那个路径，否则他不知道自己填的是什么");
+  assert.ok(r.cloudflared.detail.includes("路径不存在"),
+    "必须区分「路径不存在」与「没安装」");
+});
+
+test("checkPrereqs：填了不存在的 python 路径 → 回落但明说回落到哪", () => {
+  // 静默回落是本项目最忌讳的「看起来配好了」：用户以为自己指定了带依赖的
+  // 解释器，实际跑的是另一个。回落可以（可用比不可用好），但必须讲出来。
+  const r = checkPrereqs(configOf({ pythonPath: { get: () => "/definitely/not/here" } }));
+  if (r.python.ok) {
+    assert.ok(r.python.detail && r.python.detail.includes("/definitely/not/here"),
+      "回落到 PATH 的 python 时，detail 必须提到用户填的那个不存在的路径");
+    assert.ok(r.python.detail.includes(r.python.path),
+      "detail 必须说明回落到哪一个解释器");
+  }
+});
+
+test("checkPrereqs：缺 cloudflared 不影响内网判定（ok 只反映 python）", () => {
+  // 内网是核心功能，不该因为没装隧道工具就报"整个不能用"。
+  const r = checkPrereqs(configOf({ cloudflaredPath: { get: () => "/nope/cf" } }));
+  assert.equal(r.cloudflared.ok, false);
+  assert.equal(r.missing.includes("cloudflared"), true);
+  // ok 的语义 = 内网够用，与 cloudflared 无关
+  assert.equal(r.ok, r.python.ok);
+});
+
+test("checkPrereqs：missing 里的项与各段 ok 一致（不会自相矛盾）", () => {
+  const r = checkPrereqs(configOf({}));
+  assert.equal(r.missing.includes("python"), !r.python.ok);
+  assert.equal(r.missing.includes("cloudflared"), !r.cloudflared.ok);
+});
+
+test("cloudflaredCandidates：macOS/Linux 优先无后缀，Windows 优先 .exe", () => {
+  // 历史 bug：这里写死过 .exe，macOS 上路径"看着是对的"（目录里确实有个
+  // cloudflared）却永远 existsSync=false，导致公网功能哑掉。
+  // 本机不一定装了 cloudflared，所以测的是候选顺序里**文件名形态**，
+  // 用 PATH 里的一个真实目录造一个假文件来观察。
+  const root = mkdtempSync(join(tmpdir(), "cf-cand-"));
+  try {
+    const wantName = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
+    const wrongName = process.platform === "win32" ? "cloudflared" : "cloudflared.exe";
+    writeFileSync(join(root, wantName), "");
+    const fakeHome = root;
+    const savedHome = process.env.HOME;
+    const savedUser = process.env.USERPROFILE;
+    const savedPath = process.env.PATH;
+    try {
+      process.env.HOME = fakeHome;
+      process.env.USERPROFILE = fakeHome;
+      // 让 .dsh/dsh-pocket/bin 落在 fakeHome 下
+      mkdirSync(join(fakeHome, ".dsh", "dsh-pocket", "bin"), { recursive: true });
+      const target = join(fakeHome, ".dsh", "dsh-pocket", "bin", wantName);
+      writeFileSync(target, "");
+      writeFileSync(join(fakeHome, ".dsh", "dsh-pocket", "bin", wrongName), "");
+      process.env.PATH = join(fakeHome, ".dsh", "dsh-pocket", "bin")
+        + (process.platform === "win32" ? ";" : ":") + savedPath;
+      const got = cloudflaredCandidates();
+      assert.ok(got.some((p) => p.endsWith(wantName)),
+        `候选里应包含平台正确的文件名 ${wantName}，实际：${JSON.stringify(got)}`);
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+      if (savedUser === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = savedUser;
+      process.env.PATH = savedPath;
+    }
+  } finally {
+    rmTemp(root);
+  }
+});
+
+test("whichOnPath：找不到返回 null 而不是抛异常", () => {
+  // 这个函数在 /status 里被每 5 秒调用一次，抛异常会把整个状态接口打挂。
+  assert.equal(whichOnPath("definitely-not-a-real-cmd-xyzzy"), null);
+});
+
+test("readStatus 必然带 prereqs —— 包括提前 return 的各个分支", () => {
+  // readStatus 有六七个提前 return（目录不存在、脚本不存在、没启动过…）。
+  // 早先的写法是每个 return 里手塞字段，漏一个就会出现"某些情况下设置页
+  // 没有前置提示"的诡异表现。现在是包一层，这里钉住这个结构保证。
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const start = src.indexOf("async function readStatus(repo) {");
+  assert.ok(start > 0, "找不到 readStatus");
+  const body = src.slice(start, src.indexOf("async function readStatusInner"));
+  assert.ok(body.includes("prereqs: checkPrereqs(repo)"),
+    "readStatus 必须在包一层里统一附加 prereqs，不能依赖各分支自己塞");
+});
+
+test("startPublic：填了 cloudflaredPath 才传 --cloudflared（空串不传）", () => {
+  // 空串会变成 `--cloudflared ""`，portal_run.py 的 os.path.isfile("") 判定失败，
+  // 把"自动探测"硬生生变成"必然找不到"——这是本可避免的自伤。
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const start = src.indexOf("async function startPublic");
+  const body = src.slice(start, src.indexOf("\nasync function stopPublic"));
+  // 正向：push 必须被 if 守卫。用"if (...) 后面紧跟 argv.push"的形态判断。
+  // 注意不能只写 !/argv\.push\(...)/ —— 那行正确代码本身就匹配，会把
+  // 正确实现判成错误（我第一次就这么写的，属自字面 false positive）。
+  const guarded = /if \(repo\.cloudflaredPath\)[\s\S]{0,80}?argv\.push\("--cloudflared"/;
+  assert.ok(guarded.test(body),
+    "必须只在 cloudflaredPath 非空时才 push --cloudflared（空串会让门户的"
+    + " os.path.isfile('') 判定失败，把自动探测变成必然找不到）");
+});
+
+test("startTunnelOnly：把 cloudflaredPath 带给门户（避免为换路径重启门户）", () => {
+  // 门户是常驻进程，启动时就把路径定死了。不传这个，用户在设置页刚填的
+  // 路径要等重启才生效，而重启会换掉隧道域名。
+  const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  const start = src.indexOf("async function startTunnelOnly");
+  const body = src.slice(start, src.indexOf("async function stopTunnelOnly"));
+  assert.ok(body.includes("cloudflared"),
+    "startTunnelOnly 必须把 cloudflaredPath 传给门户");
+  assert.ok(body.includes("/_api/tunnel/start") || body.includes("tunnel/start"),
+    "应仍然走门户自己的 tunnel/start（隧道逻辑只能在门户进程内跑）");
+});
+
+test("client：缺前置条件时渲染提示（不是等用户点了才失败）", () => {
+  const src = readFileSync(join(ROOT, "client", "index.jsx"), "utf8");
+  assert.ok(src.includes("prereqs"),
+    "客户端必须消费服务端的 prereqs");
+  assert.ok(/prereqs\.python/.test(src) && /prereqs\.cloudflared/.test(src),
+    "python 与 cloudflared 要分别呈现 —— 严重程度不同");
 });

@@ -58,12 +58,58 @@ const STATES = {
     lanCandidates: ["192.168.71.10", "10.198.75.60"], lanEnabled: true,
     lanAuthEnabled: false, lanPassword: "", publicUrl: null, problem: null,
     stoppedClean: true, codeStamp: "0.7.5",
+    // 前置条件齐备的真形态（字段与 lib/index.js checkPrereqs 返回**完全一致**，
+    // mock 一旦走形，"预览正常但真机报错"就会再次发生 —— 1.0.1 的假令牌
+    // 事故就是这么来的，这里必须照真数据写）。
+    prereqs: { ok: true, missing: [],
+      python: { ok: true, path: "/usr/bin/python3", configured: null, detail: null },
+      cloudflared: { ok: true, path: "/opt/homebrew/bin/cloudflared", detail: null } },
     // 用户主动停过：下次打开 DSH 不该自动起（设置页据此显示那句提示）
     autoStart: false,
     // 点「启动」后 /start 返回的就是这份对象（假 fetch 一律回状态），
     // 所以这里塞一段 stdout 就能把「启动器输出」那一块也画出来。
     stdout: "[portal] 端口 8899 已在听\n[portal] 局域网地址 http://192.168.71.10:8899\n[portal] 已写入 runs/portal_state.json\n",
     exitCode: 0,
+  },
+  // 缺 cloudflared：内网照常、只有公网受影响 —— 必须是**轻提示**，不是红色警告块。
+  misscf: {
+    ok: true, kind: "portal", running: false, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: [], lanCandidates: ["192.168.71.10"], lanEnabled: true,
+    lanAuthEnabled: false, lanPassword: "", publicUrl: null, problem: null,
+    stoppedClean: true, autoStart: false,
+    prereqs: { ok: true, missing: ["cloudflared"],
+      python: { ok: true, path: "/usr/bin/python3", configured: null, detail: null },
+      cloudflared: { ok: false, path: null,
+        detail: "找不到 cloudflared，开启公网访问会失败（内网访问不受影响）。"
+          + "请安装：macOS `brew install cloudflared`；Windows `winget install Cloudflare.cloudflared`。"
+          + "装好后若仍探测不到，在设置页填写「cloudflared 路径」。" } },
+  },
+  // 缺 Python：硬阻塞，内网都起不来 —— 用警示块。
+  misspy: {
+    ok: true, kind: "portal", running: false, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: [], lanCandidates: ["192.168.71.10"], lanEnabled: true,
+    lanAuthEnabled: false, lanPassword: "", publicUrl: null, problem: null,
+    stoppedClean: true, autoStart: false,
+    prereqs: { ok: false, missing: ["python"],
+      python: { ok: false, path: null, configured: null,
+        detail: "找不到可用的 Python 3。内网门户由 Python 脚本拉起，没有它门户起不来。"
+          + "请安装 Python 3（macOS: brew install python3；Windows: 从 python.org 安装并勾选 Add to PATH），"
+          + "或在设置页填写「Python 路径」。" },
+      cloudflared: { ok: true, path: "/usr/local/bin/cloudflared", detail: null } },
+  },
+  // 前置条件都齐、但填的 python 路径不存在已回落：能用，但不是用户以为的那个。
+  pyfallback: {
+    ok: true, kind: "portal", running: false, portalPort: 8899,
+    portalUrl: "http://127.0.0.1:8899",
+    lanUrls: [], lanCandidates: ["192.168.71.10"], lanEnabled: true,
+    lanAuthEnabled: false, lanPassword: "", publicUrl: null, problem: null,
+    stoppedClean: true, autoStart: false,
+    prereqs: { ok: true, missing: [],
+      python: { ok: true, path: "/usr/bin/python3", configured: "/nope/python",
+        detail: "设置页填写的 Python 路径不存在：/nope/python，已自动改用 /usr/bin/python3。" },
+      cloudflared: { ok: true, path: "/usr/local/bin/cloudflared", detail: null } },
   },
   // 有节点：三种真实形态各一条（开放且上游在 / 开放但上游死 / 已屏蔽）。
   services: {
@@ -358,4 +404,7 @@ createServer((req, res) => {
   console.log(`http://127.0.0.1:${p}/?s=services`);
   console.log(`http://127.0.0.1:${p}/?s=problem`);
   console.log(`http://127.0.0.1:${p}/?s=lanoff`);
+  console.log(`http://127.0.0.1:${p}/?s=misscf`);
+  console.log(`http://127.0.0.1:${p}/?s=misspy`);
+  console.log(`http://127.0.0.1:${p}/?s=pyfallback`);
 });

@@ -92,6 +92,7 @@ Restart DSH after installing (the bundle loads in the host process).
 | `infraPath` | this repo root | Infrastructure repo: contains `tools/` and `runs/` (tunnel/proxy/credentials) |
 | `repoPath` | **empty** | Host repo root: where the exposed services live. **You must set this** |
 | `pythonPath` | empty | Interpreter for services; auto-selects `.venv313` → `.runtime` → PATH |
+| `cloudflaredPath` | empty | Path to the `cloudflared` binary; when empty it is auto-detected (`~/.dsh/dsh-pocket/bin` → `~/.dsh/bin` → `~/.local/bin` → `/usr/local/bin` → `/opt/homebrew/bin` → PATH) |
 | `passwordMode` | `random` | Password shape: `random` = new password each start / `fixed` = your fixed password |
 | `fixedPassword` | empty | Used when `passwordMode = fixed`, at least 12 chars (validated on save) |
 | `webEnabled` | `true` | Mount the `/service-portal/api` routes |
@@ -258,8 +259,10 @@ Marketplace cards and README badges are two separate mechanisms:
   domain** needs a named tunnel + ingress, which this plugin does not support. The UI therefore
   keeps saying "do not bookmark, scan the current QR code from this page each time".
 - **cloudflared must already be installed**: we reuse the local copy and **never auto-download**
-  (sibling dsh-pocket downloads from several mirrors). When it is missing, "Open public access"
-  fails outright and says why.
+  (sibling dsh-pocket downloads from several mirrors). The settings page tells you **up front**
+  what is missing and how to install it: `GET /status` carries a `prereqs` report, both start
+  buttons are disabled when Python 3 is missing (nothing can start without it), and when only
+  cloudflared is missing just "start with public access" is disabled — "start (LAN only)" still works.
 - **Liveness is only probed on refresh**: the console and settings page probe the upstream port
   when opened; there is no background timer, so a service that just died may still look alive
   until you refresh.
@@ -269,10 +272,12 @@ Marketplace cards and README badges are two separate mechanisms:
 - **Password-free LAN access is a default, not a security recommendation**: any device on the same
   WiFi can open the portal without a password. On untrusted networks, turn on the LAN password.
   This is a deliberate trade-off (scan-and-go convenience) and the UI states it plainly.
-- **Node >= 22 and host API version**: the plugin needs DSH's `webServer` / `settings` capabilities.
+- **Node >= 24 and host API version**: the plugin needs DSH's `webServer` / `settings` capabilities.
   When a host lacks them the plugin fails closed (mounts no routes) instead of half-working.
 - **Windows / macOS / Linux are all verified**, but `cloudflared` candidates are derived from the
-  platform plus common install locations; if yours is elsewhere, point to it via config.
+  platform plus common install locations; if yours is elsewhere, set `cloudflaredPath` in the
+  settings page (a path that does not exist is reported as "you typed it wrong", which is a
+  different error from "not installed" and must be handled separately).
 
 ## Disclaimer
 

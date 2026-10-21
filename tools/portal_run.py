@@ -494,9 +494,20 @@ def run_portal(args):
                 return mount, host, port, rest
         return None
 
-    def start_tunnel_now():
-        """按需建立隧道（设置页「开启外网访问」）。返回 (ok, 说明)。"""
-        cloudflared = args.cloudflared or DEFAULT_CLOUDFLARED
+    def start_tunnel_now(override=None):
+        """按需建立隧道（设置页「开启外网访问」）。返回 (ok, 说明)。
+
+        `override` 是插件从设置页透传下来的路径（POST /_api/tunnel/start 的
+        `cloudflared` 字段）。优先级：本次请求的 override > 启动参数
+        --cloudflared > 自动探测。
+
+        为什么需要这一层：门户是**常驻进程**，启动时就把 cloudflared 路径定死了。
+        用户装好 cloudflared 之后（或填了设置页那个路径）如果不重启门户，
+        就永远用的还是老的判定结果。有了 override，"开公网访问"这一次动作
+        就能用上新填的路径，不必为此把门户重启一遍（重启会换掉隧道域名）。
+        """
+        explicit = str(override or "").strip()
+        cloudflared = explicit or args.cloudflared or DEFAULT_CLOUDFLARED
         if not os.path.isfile(cloudflared):
             # 报错必须给出**下一步怎么修**。只说"找不到"会让用户卡在这里，
             # 而这恰恰是当初"开启公网访问失败"只留一个 502 的教训。
@@ -780,7 +791,10 @@ def run_portal(args):
                                          "public_url": public_url_holder["url"],
                                          "note": "隧道已在运行"})
                 return True
-            ok, detail = start_tunnel_now()
+            # 插件可以带一个 cloudflared 路径下来（设置页刚填的那个）。
+            # parse_body 同时吃 JSON 与表单，两种调用方都不为难。
+            req_data = parse_body(handler, body)
+            ok, detail = start_tunnel_now(req_data.get("cloudflared"))
             handler._send_json(200 if ok else 502, {
                 "ok": ok, "public_url": public_url_holder["url"], "detail": detail})
             return True

@@ -1,5 +1,87 @@
 # Changelog
 
+## 1.0.4 (2026-10-21)
+
+**修复市场反馈的核心问题：缺 Python / cloudflared 时，插件此前一句话都不说。**
+
+市场 PR（awesome-dsh-plugin#7566）的维护者指出条目描述里没写运行前置，并在合并时补上了。
+但描述写清只是第一步 —— 更根本的问题是**插件本身不检测**：
+
+- 门户本体由 Python 脚本拉起（`lib/index.js` 的 `startPublic`），装好插件但本机没有
+  Python 3 时，用户点「启动」只会看到一句拉不起进程的报错；
+- 外网通道**只复用**本机已装的 `cloudflared`，不会自己下载（`tools/portal_run.py`
+  的 `_resolve_cloudflared()`），没有它的用户在点「开启公网访问」时才会失败。
+
+两次失败都发生在用户**已经期待成功**的那一刻，而此时界面此前没有任何预警。
+
+### 新增：前置条件检测（`/status` 与设置页）
+
+`lib/index.js` 新增 `checkPrereqs(repo)`，结果随 `GET /status` 的 `prereqs` 字段返回：
+
+```js
+{ ok, python: { ok, path, configured, detail }, cloudflared: { ok, path, detail }, missing: [] }
+```
+
+- **只做文件系统探测，不执行任何东西**。这条是硬约束：设置页每 5 秒轮询一次 `/status`，
+  如果每次去 spawn 一个 Python，插件会变成持续烧 CPU 的进程。判断「在不在」用 stat 就够；
+  「能不能用」仍由启动时真正的 `usablePython` 探测负责，两者职责分开。
+- `ok` 的语义是**「开内网够用」**（只看 python），不是「全部齐备」——
+  内网访问是核心功能，不该因为没装隧道工具就被判成不可用。是否要公网看 `missing`。
+- cloudflared 候选顺序与 `portal_run.py` 的 `_resolve_cloudflared()` **保持一致**
+  （两处跑在不同语言里无法共用，但顺序必须一样，否则会出现「插件说没找到、门户却能起」
+  的自相矛盾提示）。macOS/Linux 文件名无 `.exe` 后缀，只有 Windows 优先 `.exe`。
+
+### 新增：`cloudflaredPath` 配置项
+
+README「已知限制」早就写着「若你的安装位置不在候选内，需通过配置项显式指定」，
+但 `Config` 里**根本没有这个字段** —— 承诺落空。本次补上：
+
+- 留空 = 自动探测（默认）；
+- 填了但文件不存在：**明确报「填错」而不是「没装」**。这是两种不同的错，
+  混成一句会让用户照着「安装 cloudflared」去装，而真正的问题是他填错了路径。
+- 该路径同时经 `POST /start` 与 `POST /tunnel/start` 透传给门户。
+
+### 新增：门户运行时接受 cloudflared 路径覆写
+
+`tools/portal_run.py` 的 `start_tunnel_now()` 增加 `override` 参数，优先级
+`本次请求 > --cloudflared 启动参数 > 自动探测`；`/_api/tunnel/start` 从请求体读取
+`cloudflared` 字段。原因：门户是常驻进程，启动时就把路径定死了。没有这条，
+用户在设置页刚填的路径要等门户**重启**才生效，而重启会换掉隧道域名。
+
+### 修复：pythonPath 填错时被静默回落
+
+`checkPrereqs` 里显式填了不存在的 `pythonPath` 时仍会回落（可用比不可用好），
+但此前完全不提示 —— 用户以为自己指定了某个带依赖的特定解释器，实际跑的是另一个，
+症状表现为「启动失败但看不出原因」。现在会在 `python.detail` 里写明回落到哪了。
+
+### 设置页：动手之前就说，并按严重程度分级
+
+- 缺 Python 3 → 警示块（`dsp-warn`），且**两个启动按钮都禁用**（点了必然失败，
+  亮着的按钮等于邀请用户去撞墙），禁用时用 `title` 说明原因；
+- 缺 cloudflared → 行内提示（`dsp-inlineWarn`），**只有「启动并开公网」禁用**，
+  「启动（只内网）」必须保持可点 —— 没装隧道工具不影响本机/局域网使用；
+- 拿不到 `prereqs`（老宿主 / 字段拼写变化）时一律认作可用：
+  把「不知道」当成「不行」比不检测更糟。
+
+### 测试
+
+新增 6 项客户端检验 + 12 项服务端检验（含反证）：
+
+- 缺 Python 时两个按钮都禁用；缺 cloudflared 时**只有**公网按钮禁用（内网按钮的
+  断言里不允许出现 `cfReady`）；无 `prereqs` 时不锁死按钮；
+- `checkPrereqs` 返回结构固定、`missing` 与各段 `ok` 不自相矛盾；
+- 填了不存在的 cloudflared / python 路径分别给出不同的说明；
+- 预览工具的 mock 必须与 `checkPrereqs` 返回**同构**（1.0.1 的教训：预览里的假数据
+  走形 → 预览正常、真机报错）。
+
+反证验证：把按钮禁用改回旧行为 → 2 条转红；去掉 `!prereqs ||` 兜底 → 2 条转红；
+删掉新函数 → 12 条转红。恢复后全绿。
+
+### 预览工具
+
+`tools/render_panel_preview.mjs` 新增三个状态（`misscf` / `misspy` / `pyfallback`），
+并在 `off` 状态补上「前置条件齐备」的真形态，供人工核对两种主题下的分级呈现。
+
 ## 1.0.3 (2026-10-20)
 
 **修复 1.0.2 的打包卫生回归：`__pycache__` 混进了 npm 包。**

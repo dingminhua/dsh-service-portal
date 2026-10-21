@@ -770,3 +770,97 @@ test("主题成对：会翻转的背景令牌不得配写死的文字色", () =>
     && !foreground.some((t) => fg2[1].trim().includes(t)),
     "反证失败：这条检验抓不到经典的 brand-primary + #fff 组合，等于空转");
 });
+
+// ---------------------------------------------------------------------------
+// 前置条件提示：缺 Python / cloudflared 时，设置页必须**动手之前**就说。
+//
+// 用户反馈的原话是「装好插件什么都不说，点了才失败」。所以这里的断言不是
+// 「有提示文案」这种软要求，而是钉住三件具体的事：
+//   1. 缺 Python 时两个启动按钮都必须 disabled（硬阻塞，点了必然失败）；
+//   2. 缺 cloudflared 时**只有**开公网那个禁用，「只内网」必须还能点；
+//   3. 没拿到 prereqs（老宿主）时按钮**不能**被锁死 —— 把"不知道"当成"不行"
+//      比不检测更糟。
+// 全部按源码结构断言，因为这是在 node 里跑（无 DOM），而组件函数的可测性
+// 靠的就是"条件都从 status 派生、不藏副作用"。
+// ---------------------------------------------------------------------------
+const clientSrc = readFileSync(join(ROOT, "lib", "client.js"), "utf8");
+
+test("前置条件：缺 Python 时两个启动按钮都禁用（并说明原因）", () => {
+  // pyReady 的派生：!prereqs || !python || python.ok !== false
+  assert.ok(/const pyReady = !prereqs \|\| !prereqs\.python \|\| prereqs\.python\.ok !== false/
+    .test(clientSrc), "找不到 pyReady 的派生表达式 —— 按钮禁用逻辑失去了单一真相源");
+
+  // start-lan 按钮的 disabled 必须引用 pyReady
+  const lanBtn = /key: "start-lan"[\s\S]{0,400}?disabled: !!busy \|\| !pyReady/.exec(clientSrc);
+  assert.ok(lanBtn, "「启动（只内网）」没有按 pyReady 禁用 —— 缺 Python 时用户仍能点，点了必失败");
+
+  // 禁用必须配 title：灰按钮不说话，用户会以为是插件卡住
+  assert.ok(/title: pyReady \? undefined : "缺少可用的 Python 3/.test(clientSrc),
+    "禁用启动按钮时必须给出 title 说明原因");
+});
+
+test("前置条件：缺 cloudflared 只禁用开公网，内网按钮保持可点", () => {
+  const pubBtn = /key: "start-pub"[\s\S]{0,400}?disabled: !!busy \|\| !pyReady \|\| !cfReady/
+    .exec(clientSrc);
+  assert.ok(pubBtn, "「启动并开公网」没有按 cfReady 禁用");
+
+  // 关键反证：内网按钮的 disabled **不能**出现 cfReady。
+  // 没装隧道工具不影响本机/局域网使用，若把主功能一起判死就是过度阻断。
+  const lanBtnSeg = /key: "start-lan"[\s\S]{0,400}?onClick/.exec(clientSrc);
+  assert.ok(lanBtnSeg, "找不到 start-lan 按钮段");
+  assert.ok(!lanBtnSeg[0].includes("cfReady"),
+    "「启动（只内网）」不应受 cfReady 影响 —— 缺 cloudflared 只挡公网，不该把内网也关掉");
+});
+
+test("前置条件：拿不到 prereqs 时按钮不被锁死（不把「不知道」当「不行」）", () => {
+  // pyReady/cfReady 的表达式里 `!prereqs ||` 这一支就是"老宿主没有该字段"的兜底。
+  // 少了它，任何字段拼写变化都会把按钮永久锁灰。
+  assert.ok(/const pyReady = !prereqs \|\|/.test(clientSrc),
+    "pyReady 缺少 prereqs 缺失时的兜底 —— 老宿主上会把按钮永久禁用");
+  assert.ok(/const cfReady = !prereqs \|\|/.test(clientSrc),
+    "cfReady 缺少 prereqs 缺失时的兜底");
+});
+
+test("前置条件：缺 Python 用警示块、缺 cloudflared 用行内提示（分级不当会误导）", () => {
+  // 缺 Python = 硬阻塞（内网都起不来）→ dsp-warn（带底色/左边框的块）
+  assert.ok(/key: "pre-python", className: "dsp-warn"/.test(clientSrc),
+    "缺 Python 必须是警示块，不能只是一行字");
+  // 缺 cloudflared = 只影响公网 → dsp-inlineWarn（轻提示）
+  assert.ok(/key: "pre-cf", className: "dsp-inlineWarn"/.test(clientSrc),
+    "缺 cloudflared 应是行内提示；用警示块会让用户以为整个插件坏了");
+});
+
+test("前置条件：客户端不自己探测，只消费服务端 prereqs（单一真相源）", () => {
+  // 前端出现 spawn/which/existsSync 之类的探测就意味着两处判定会打架。
+  assert.ok(!/existsSync\(|spawnSync\(|child_process/.test(clientSrc),
+    "客户端不应自己做文件/进程探测 —— 判定只在 lib/index.js 的 checkPrereqs 一处");
+  assert.ok(/status\.prereqs/.test(clientSrc),
+    "客户端应从 status.prereqs 取判定结果");
+});
+
+test("预览工具的前置条件 mock 与 checkPrereqs 返回结构一致", () => {
+  // 1.0.1 的教训：预览里的假数据走形 → 预览正常、真机报错。
+  // 这里钉住 mock 的字段形状与服务端返回**同构**。
+  const preview = readFileSync(join(ROOT, "tools", "render_panel_preview.mjs"), "utf8");
+  const server = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+
+  // 服务端返回的键。注意服务端用的是**对象简写**（`{ python, cloudflared, missing }`），
+  // 所以不能找 `missing:` —— 那会匹配不到（我第一版就这么写的，属于断言写形不写实：
+  // 钉住的是源码的字面拼法而不是返回值的形状，换一种等价写法就误报）。
+  // 改为从 checkPrereqs 里截出 return 块，逐个键判断以简写或键值对形式出现。
+  const fnStart = server.indexOf("function checkPrereqs(");
+  assert.ok(fnStart > 0, "找不到 checkPrereqs 定义");
+  const retIdx = server.indexOf("return {", fnStart);
+  assert.ok(retIdx > 0, "checkPrereqs 里找不到 return 对象");
+  const retBlock = server.slice(retIdx, server.indexOf("};", retIdx));
+  for (const key of ["python", "cloudflared", "missing"]) {
+    const inServer = new RegExp(`\\b${key}\\b`).test(retBlock);
+    assert.ok(inServer, `checkPrereqs 返回对象缺少 ${key}`);
+    assert.ok(new RegExp(`\\b${key}:`).test(preview),
+      `预览 mock 缺少 ${key} —— 预览会与真机不同构`);
+  }
+  // 三个展示状态都要有，否则改样式时只能看一种缺失情形
+  for (const st of ["misscf", "misspy", "pyfallback"]) {
+    assert.ok(new RegExp(`\\b${st}:\\s*\\{`).test(preview), `预览缺少 ${st} 状态`);
+  }
+});
