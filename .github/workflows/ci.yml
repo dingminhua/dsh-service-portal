@@ -16,7 +16,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # 为什么钉 ubuntu-24.04 而不是 ubuntu-latest：
+        # `ubuntu-latest` 自 2026-10-19 起开始迁移到 Ubuntu 26
+        # （actions/runner-images#14748）。本项目的测试会真实派生子进程、
+        # 反复建删临时目录、并探测系统路径（rmTemp 的 EBUSY 重试、
+        # cloudflared 候选目录、Python 探测），底层 libc 与默认工具链换一版
+        # 就可能让这些断言变红 —— 那种红是**环境噪音**，不是产品回归，
+        # 排查成本却和真 bug 一样高。钉住版本让 CI 只在代码变化时变红。
+        # 等本仓库在 Ubuntu 26 上手动验证过（或 Actions 废弃 24.04 镜像）
+        # 再改这一行。
+        os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
