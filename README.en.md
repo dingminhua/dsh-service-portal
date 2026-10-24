@@ -85,6 +85,27 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 Restart DSH after installing (the bundle loads in the host process).
 
+### ⚠ Installing is not enough — enable the bundle too
+
+`dsh plugin add` is a **pnpm wrapper**: it only puts the package into the profile's
+`dependencies`. What actually makes the host load a bundle is the profile manifest's
+**`dsh.profile.bundles` list** (`~/.dsh/profiles/<profile>/package.json`).
+**A package that is only in `dependencies` is never loaded**: the settings page has no
+entry for it, every `/service-portal/api/*` call returns 404, and **nothing is logged**.
+
+So after installing, enable the bundle — either way:
+
+- **In the app**: open the Plugins panel, find "DSH Service Portal" and switch it on
+  (the in-app plugin manager writes `dsh.profile.bundles` and takes effect immediately,
+  no restart needed);
+- **By hand**: the CLI cannot do it (`dsh plugin` only forwards to pnpm), so add
+  `"dsh-service-portal"` to `dsh.profile.bundles` in
+  `~/.dsh/profiles/<profile>/package.json` and restart the host.
+
+> **Check this first after a host upgrade**: a newer host can drop the entry while it
+> rewrites the profile manifest. The symptom is "it worked before the upgrade, now the
+> plugin page is empty and the API 404s". See "Known limitations" for the diagnosis.
+
 ## Configuration (DSH settings page)
 
 | Field | Default | Description |
@@ -274,6 +295,14 @@ Marketplace cards and README badges are two separate mechanisms:
   This is a deliberate trade-off (scan-and-go convenience) and the UI states it plainly.
 - **Node >= 24 and host API version**: the plugin needs DSH's `webServer` / `settings` capabilities.
   When a host lacks them the plugin fails closed (mounts no routes) instead of half-working.
+- **The host silently skips the plugin after an upgrade**: the host only loads bundles listed in
+  the profile manifest's `dsh.profile.bundles`. If a newer host rewrites that manifest without
+  this entry, the plugin **disappears entirely and logs nothing** — no settings entry, and
+  `/service-portal/api/status` returns 404. Diagnosis: if `curl http://127.0.0.1:<port>/service-portal/api/status`
+  cannot connect, the plugin is not loaded (that is different from "the portal is not started").
+  Fix: switch "DSH Service Portal" back on in the Plugins panel, or write
+  `"dsh-service-portal"` back into `dsh.profile.bundles` of
+  `~/.dsh/profiles/<profile>/package.json` and restart the host.
 - **Windows / macOS / Linux are all verified**, but `cloudflared` candidates are derived from the
   platform plus common install locations; if yours is elsewhere, set `cloudflaredPath` in the
   settings page (a path that does not exist is reported as "you typed it wrong", which is a

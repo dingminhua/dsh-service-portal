@@ -360,6 +360,38 @@ test("readStatus：启动器脚本缺失 → ok:false 且给具体原因", async
   }
 });
 
+test("readStatus：门户状态文件没有 password_mode → 口令形态兜底到插件配置", async () => {
+  // 踩过的坑：门户的状态文件（runs/portal_state.json）**根本不写** password_mode
+  // （写它的只有旧启动器），于是 portal.passwordMode 恒为 null。而口令形态的权威
+  // 在插件自己的 Config（POST /settings 改的是它）。不兜底的后果是：用户把形态
+  // 改成「固定口令」，插件页的摘要行仍显示「随机口令」—— 一句和真实状态相反的话。
+  const server = createServer();
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const port = server.address().port;
+  const root = fakeRepo();
+  writeFileSync(join(root, "runs", "portal_state.json"), JSON.stringify({
+    portal_port: port,
+    portal_pid: process.pid,
+    password: "secret",
+    lan_urls: ["http://192.168.2.2:" + port],
+    lan_enabled: true,
+  }), "utf8");
+  try {
+    // 正例：配置说「固定口令」→ 状态必须说固定口令
+    const fixed = await readStatus({ ...repoOf(root), passwordMode: "fixed" });
+    assert.equal(fixed.ok, true);
+    assert.equal(fixed.passwordMode, "fixed",
+      "门户状态文件没有 password_mode 时，口令形态必须取插件配置（否则界面会说反）");
+    // 反例：配置没给 → 兜底默认「随机」，而不是 null（null 会让前端猜）
+    const fallback = await readStatus(repoOf(root));
+    assert.equal(fallback.passwordMode, "random",
+      "配置也没有口令形态时必须兜底成 random，而不是 null");
+  } finally {
+    server.close();
+    rmTemp(root);
+  }
+});
+
 test("readStatus：无凭据文件 → 未启动过，running:false，不报 problem", async () => {
   const root = fakeRepo({});
   try {

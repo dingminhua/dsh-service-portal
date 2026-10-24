@@ -151,6 +151,26 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 > 若旧 profile 仍装有已删除的子插件 `dsh-poker-viewer`，先移除再装根插件：
 > `& $dsh plugin --profile desktop remove dsh-poker-viewer`。
 
+### ⚠ 装完还要「启用」这一步（最常见的"装完没反应"）
+
+`dsh plugin add` 实质是 **pnpm 的包装**：它只把包装进 profile 的 `dependencies`。
+真正让宿主加载一个 bundle 的，是 profile 清单里的 **`dsh.profile.bundles` 名单**
+（`~/.dsh/profiles/<profile>/package.json`）。**只在 dependencies 里、不在 bundles 里
+= 宿主根本不加载这个插件**：设置页没有这一项、`/service-portal/api/*` 全部 404，
+而且**不报任何错**。
+
+所以装完还要在宿主里把这条 bundle 打开，任选一种：
+
+- **应用内**：「插件」面板里找到「对外服务门户」，把开关打开（由应用内的插件管理器写入
+  `dsh.profile.bundles`，并立刻生效，无需重启）；
+- **命令行**：`dsh plugin` 只转发 pnpm，**不能**改 bundles 名单，所以命令行没有等价操作；
+  要改就编辑 `~/.dsh/profiles/<profile>/package.json` 的 `dsh.profile.bundles`
+  （加上 `"dsh-service-portal"`）后重启宿主。
+
+> **宿主升级后请先查这一条**：新版本宿主重建 profile 清单时有可能把这条从 bundles 里漏掉，
+> 表现就是"升级前好好的，升级后插件页空白、接口 404"。症状与处理见
+> [已知限制](#已知限制) 里的「宿主升级后插件被静默跳过」。
+
 ### 兼容的 DSH 版本
 
 从 **1.0.1** 起，本插件在 `package.json` 里声明了新版 DSH 的版本门禁字段：
@@ -169,6 +189,21 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 > 升级 DSH 大版本时，先跑 `npm run test:manifest`。它会调用**宿主自己的**
 > `evaluatePluginCompatibility()` 判定本插件，同时用反例确认判定逻辑确实生效；
 > 找不到宿主运行时则明确 skip（`DSH_APP_BOOT=<dsh 根目录>` 可显式指定），不会假装通过。
+
+**已验证的宿主版本**：DSH **0.2.1-rc.3**（正式版 `DeepSeek Harness.app`）。
+0.2.1-rc.2 → rc.3 的改动集中在导航/面板入口自定义（新增 `ui-entry-customization`
+与三个 `*.actions` 槽位）、埋点事件、以及 DeepSeek API Key 的 `/models` 列表路由，
+**没有触碰本插件用到的任何接口**：`plugins.bundle.config` / `plugins.row.config`
+两个槽位的注册契约、`webServer.register({kind:'prefix'})`、`Config`（schemastery）
+投影、`dsh.client` 清单字段，全部未变。
+
+```bash
+# 用宿主自己的运行时跑门禁检验（rc.3 实测 10/10 通过）。
+# 注意：宿主装在 app.asar 里，普通 node 读不到 —— 用宿主自带的 Electron 当 node 用。
+APP="/Applications/DeepSeek Harness.app/Contents/Resources"
+DSH_APP_BOOT="$APP/app.asar/dsh/node_modules/@deepseek-ai/dsh-app-boot" \
+ELECTRON_RUN_AS_NODE=1 "$APP/../MacOS/DeepSeek Harness" --test test/manifest.test.mjs
+```
 
 ## 配置（DSH 设置页）
 
@@ -532,6 +567,12 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
   网络上请打开「局域网访问密码」。这是刻意的取舍（扫码即用的便利），界面已如实说明。
 - **Node ≥ 24 与宿主 API 版本**：插件依赖 DSH 提供的 `webServer` / `settings` 能力；
   宿主缺这些能力时插件会 fail-closed（不挂路由），而不是半残运行。
+- **宿主升级后插件被静默跳过**：宿主只会加载 profile 清单 `dsh.profile.bundles` 里的 bundle。
+  新版宿主重建 profile 清单时若漏掉这一条，本插件会**整体消失且不报错** —— 设置页没有这一项、
+  `/service-portal/api/status` 返回 404。判据：`curl http://127.0.0.1:<端口>/service-portal/api/status`
+  连不上就是没加载（不是"没启动门户"）。处理：在「插件」面板里把「对外服务门户」重新打开，
+  或把 `"dsh-service-portal"` 写回 `~/.dsh/profiles/<profile>/package.json` 的
+  `dsh.profile.bundles` 后重启宿主。
 - **Windows / macOS / Linux 均已验证**：`cloudflared` 的探测路径按平台与常见安装位置推导，
   若你的安装位置不在候选内，在设置页填 `cloudflaredPath` 即可显式指定
   （填了不存在的路径时，设置页会明确说是"填错了"而不是"没装"，两者要分别处理）。

@@ -23,6 +23,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -136,6 +137,39 @@ test("清单：图标是包内相对路径、格式合规、体积在 256 KiB �
     "宿主只接受 SVG / PNG / JPEG / WebP");
   const size = statSync(target).size;
   assert.ok(size > 0 && size <= 256 * 1024, `图标必须在 256 KiB 以内，当前 ${size} 字节`);
+});
+
+test("清单：导出了 locale 词典且带英文词典（宿主的插件页显示元数据只认它）", () => {
+  // 宿主读插件显示元数据只有两个来源：`<包名>/locale/en.json` 起的词典，
+  // 以及清单里的 name / description / icon —— 它**不读** displayName。
+  // 所以插件页的标题与简介必须走 locale 词典；缺了它，英文界面下显示的是包名。
+  const localeExport = manifest.exports?.["./locale/*.json"] ?? manifest.exports?.["./locale/en.json"];
+  assert.ok(localeExport,
+    "exports 必须导出 locale 词典（宿主按 `<包名>/locale/<语言>.json` 解析它，缺了就解析不到）");
+  assert.ok(statSync(join(ROOT, "locale", "en.json")).isFile(),
+    "缺少 locale/en.json（英文词典是宿主读取词典的入口文件）");
+  const en = JSON.parse(readFileSync(join(ROOT, "locale", "en.json"), "utf8"));
+  assert.equal(typeof en?.meta?.title, "string", "locale/en.json 必须有 meta.title");
+  assert.ok(en.meta.title.trim() !== "", "locale/en.json 的 meta.title 不能是空串");
+  assert.equal(typeof en?.meta?.description, "string", "locale/en.json 必须有 meta.description");
+  assert.ok(en.meta.description.trim() !== "", "locale/en.json 的 meta.description 不能是空串");
+});
+
+test("清单：locale 词典能被宿主那样的解析器解析出来（正例 + 反例）", () => {
+  // 宿主用 Node 的解析器按 `<包名>/locale/<语言>.json` 取资源；包名自引用
+  // （self-reference）走的正是同一套 exports 规则，所以这里测的就是它。
+  const require = createRequire(join(ROOT, "package.json"));
+  assert.match(require.resolve(`${manifest.name}/locale/en.json`), /locale[/\\]en\.json$/,
+    "宿主按包名解析 locale/en.json 必须成功（exports 里缺 \"./locale/*.json\" 就解析不到）");
+  assert.throws(() => require.resolve(`${manifest.name}/locale/not-a-language.json`),
+    "不存在的词典必须解析失败 —— 否则这条检查根本没测到解析器");
+});
+
+test("清单：中文词典也在（界面语言是中文时用得上）", () => {
+  const zh = JSON.parse(readFileSync(join(ROOT, "locale", "zh.json"), "utf8"));
+  assert.equal(typeof zh?.meta?.title, "string", "locale/zh.json 必须有 meta.title");
+  assert.ok(zh.meta.title.trim() !== "", "locale/zh.json 的 meta.title 不能是空串");
+  assert.equal(typeof zh?.meta?.description, "string", "locale/zh.json 必须有 meta.description");
 });
 
 test("门禁：宿主判定本插件与当前运行时相容（正例）", { skip: skipReason }, () => {

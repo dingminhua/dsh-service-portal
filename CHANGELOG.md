@@ -1,5 +1,114 @@
 # Changelog
 
+## 1.0.5 (2026-10-24)
+
+**跟随宿主升级：DSH 0.2.1-rc.3（正式版 `DeepSeek Harness.app`）。**
+
+宿主从 `DSH NEXT.app`（夜间构建）换成正式版 **0.2.1-rc.3**。结论先说：
+**插件代码一行不用改**，但宿主重建 profile 清单时把这条 bundle 从
+`dsh.profile.bundles` 里漏掉了 —— 于是插件**整体没加载**，而且**不报任何错**。
+
+### 这次的实际故障：插件静默消失（不是代码坏了）
+
+宿主升级后本插件在运行时里**根本不存在**：
+
+- 宿主的插件清单里查不到 `dsh-service-portal`（`Config` 无条目、`plugin list` 无行）；
+- 客户端两个槽位（`plugins.bundle.config` / `plugins.row.config`）里没有本插件的注册；
+- `GET /service-portal/api/status` 连路由都不存在。
+
+根因不在插件里，在宿主的 profile 组装规则：宿主**只加载 `dsh.profile.bundles`
+名单里的 bundle**（`~/.dsh/profiles/desktop/package.json`）。
+`dependencies` 里装着 ≠ 会加载。而 `dsh plugin add` 只是 pnpm 的包装，
+**只写 dependencies，不碰 bundles** —— 所以"装过"和"被加载"是两件事。
+
+处理：用宿主自己的插件管理器把这条 bundle 重新打开（`set_bundle`），
+它会写回 `dsh.profile.bundles` 并立刻生效。修复后实测：
+
+| 检查项 | 结果 |
+| :--- | :--- |
+| 宿主 `Config` 条目 | `include:dsh-service-portal`（status: schema） |
+| 客户端槽位 | `plugins.bundle.config` / `plugins.row.config` 各两条（裸名 + `include:` 前缀两种拼写） |
+| `GET /service-portal/api/status` | 200，返回真实状态（门户在跑、pid、内网地址、口令形态、前置条件检测） |
+| `GET /service-portal/api/qr?url=<内网地址>` | 200，返回二维码 data URI |
+| `npm test` | 134 通过 / 0 失败 |
+| `test/manifest.test.mjs`（对着 rc.3 真实运行时） | 10/10 通过 |
+
+### 宿主 rc.3 的改动与本插件的关系
+
+rc.2 → rc.3 的改动集中在：导航/面板入口自定义（新增 `ui-entry-customization`
+客户端包与 `conversation.session.header.views.actions`、`sidebar.panellist.actions`、
+`sidebar.right.tab.guide.actions` 三个新槽位）、导航/预设埋点、DeepSeek API Key 的
+`/models` 列表路由、UI 基础组件的 Menu/Tooltip 调整。
+
+本插件用到的接口**一个都没变**：
+
+| 插件用到的 | rc.3 现状 |
+| :--- | :--- |
+| `plugins.bundle.config` / `plugins.row.config` 槽位注册契约 | 未变（catalog 只新增了会话/侧栏侧的槽位） |
+| `webServer.register({kind:'prefix', path, handler})` | 未变（`dsh-host-webserver` 的路由契约一致） |
+| `Config`（schemastery `z.object` + `volatile()`） | 未变 |
+| `dsh.client` 清单字段（`platform: web` + `exports["./client"]`） | 未变 |
+| `engines.dsh` 版本门禁 | 未变（rc.3 判定本插件相容） |
+
+所以本版本**没有代码改动**，只有安装/启用流程的说明与防呆。
+
+### 修复：口令形态在摘要行说反了（状态里恒为 null）
+
+门户的状态文件（`runs/portal_state.json`）**根本不写** `password_mode`（写它的只有
+旧启动器），于是 `/status` 里的 `passwordMode` 恒为 `null`。而口令形态的权威在
+**插件自己的 Config**（`POST /settings` 改的是它，门户只管局域网那三项）——
+`/settings` 接口一直返回正确的形态，`/status` 却不返回。
+
+后果：用户把形态改成「固定口令」，插件页的摘要行仍显示「随机口令」，
+**一句和真实状态相反的话**。
+
+修法：`/status` 在门户形态那条路径上兜底到配置
+（`portal.passwordMode ?? repo.passwordMode ?? "random"`），并补了 2 条检验
+（正例：配置 fixed → 状态 fixed；反例：配置缺失 → 兜底 random 而不是 null）。
+
+> 注意：这一改在**宿主端**，需要插件重新加载后生效（重启 DSH，或在「插件」面板
+> 里把它关一次再开）；宿主端代码的热替换不在插件这一侧的控制范围内。
+
+### 对齐宿主的插件显示元数据契约（locale 词典）
+
+宿主读插件的标题/简介**只认两个来源**：`<包名>/locale/en.json` 起的词典，
+以及清单里的 `name` / `description` / `icon` —— 它**不读** `displayName`。
+本插件此前没有 locale 词典，于是插件页的标题会退化成包名 `dsh-service-portal`，
+简介永远是中文那一段（英文界面下也是中文）。
+
+按同族插件（workbuddy / qoder / trae）的做法补上：
+
+- 新增 `locale/en.json`（英文标题与简介）与 `locale/zh.json`（中文）；
+- `package.json` 的 `exports` 增加 `"./locale/*.json": "./locale/*.json"`
+  （宿主就是按这个子路径解析词典的，缺了就解析不到、locale 整体失效）；
+- `files` 增加 `locale`（否则 npm 包里没有这两个文件，发布出去等于没加）。
+
+并补了 3 条清单检验把这件事钉住（正例 + 反例）：词典存在且字段非空、
+按包名能被解析器解析出来、不存在的词典必须解析失败。
+
+### 文档：把"装完还要启用"这件事写清楚
+
+README 新增「⚠ 装完还要『启用』这一步」小节，并写清：
+
+- `dsh plugin add` 只是 pnpm 包装，只写 `dependencies`；
+- 真正决定加载的是 `dsh.profile.bundles`，**只在 dependencies 里不会加载**，
+  且**不报错**（症状：插件页空白 + 接口 404）；
+- 处理方式：应用内「插件」面板打开开关（立即生效、无需重启），或手改 profile 清单后重启。
+
+同时在「已知限制」里补了「宿主升级后插件被静默跳过」条目：给出判据
+（`curl .../service-portal/api/status` 连不上 = 没加载，不是"门户没启动"）与处理步骤。
+
+### 已验证的宿主版本
+
+DSH **0.2.1-rc.3**。门禁检验可直接对着宿主的真实运行时跑（宿主装在 `app.asar` 里，
+普通 node 读不到，要用宿主自带的 Electron 当 node 用）：
+
+```bash
+APP="/Applications/DeepSeek Harness.app/Contents/Resources"
+DSH_APP_BOOT="$APP/app.asar/dsh/node_modules/@deepseek-ai/dsh-app-boot" \
+ELECTRON_RUN_AS_NODE=1 "$APP/../MacOS/DeepSeek Harness" --test test/manifest.test.mjs
+```
+
 ## 1.0.4 (2026-10-21)
 
 **修复市场反馈的核心问题：缺 Python / cloudflared 时，插件此前一句话都不说。**
