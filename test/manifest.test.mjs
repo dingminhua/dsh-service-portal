@@ -172,6 +172,27 @@ test("清单：中文词典也在（界面语言是中文时用得上）", () =>
   assert.equal(typeof zh?.meta?.description, "string", "locale/zh.json 必须有 meta.description");
 });
 
+test("清单：插件在宿主清单里的名字就是包名（各语言词典的 meta.title）", () => {
+  // 宿主的插件清单行与包卡片都读 `<包名>/locale/<语言>.json` 的 meta.title；
+  // 它不读 displayName。所以「插件叫什么」这件事只有一个开关：各语言词典里的
+  // meta.title。中文产品名（对外服务门户）留在门户网页与插件自己的设置页标题里，
+  // 不进清单 —— 清单里用包名，与包管理器、市场条目保持同一个称呼。
+  //
+  // 为什么锁死：这条是**显示契约**而不是文案偏好。meta.title 一旦被填成别的，
+  // 宿主清单就与包管理器分叉（一个叫「对外服务门户」、一个叫 dsh-service-portal），
+  // 用户会以为是两个插件。
+  const en = JSON.parse(readFileSync(join(ROOT, "locale", "en.json"), "utf8"));
+  const zh = JSON.parse(readFileSync(join(ROOT, "locale", "zh.json"), "utf8"));
+  assert.equal(en.meta.title, manifest.name,
+    `locale/en.json 的 meta.title 必须是包名 ${manifest.name}（清单里显示的名字要跟包管理器一致）`);
+  assert.equal(zh.meta.title, manifest.name,
+    `locale/zh.json 的 meta.title 必须是包名 ${manifest.name}（中文界面下同样显示包名）`);
+  // 反证：这条断言不能恒真 —— 包名本身必须真的出现在词典里。
+  assert.ok(manifest.name.length > 0, "包名不能是空串，否则上面两条断言等于没测");
+  assert.match(en.meta.title, /dsh-service-portal/,
+    "反证：英文词典的标题里必须真的出现包名，否则上面的相等断言可能是空对空");
+});
+
 test("门禁：宿主判定本插件与当前运行时相容（正例）", { skip: skipReason }, () => {
   const runtimeVersion = host.getDshRuntimeVersion();
   const issue = host.evaluatePluginCompatibility(manifest, {}, runtimeVersion);

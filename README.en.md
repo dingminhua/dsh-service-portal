@@ -95,7 +95,7 @@ entry for it, every `/service-portal/api/*` call returns 404, and **nothing is l
 
 So after installing, enable the bundle — either way:
 
-- **In the app**: open the Plugins panel, find "DSH Service Portal" and switch it on
+- **In the app**: open the Plugins panel, find "dsh-service-portal" and switch it on
   (the in-app plugin manager writes `dsh.profile.bundles` and takes effect immediately,
   no restart needed);
 - **By hand**: the CLI cannot do it (`dsh plugin` only forwards to pnpm), so add
@@ -300,7 +300,7 @@ Marketplace cards and README badges are two separate mechanisms:
   this entry, the plugin **disappears entirely and logs nothing** — no settings entry, and
   `/service-portal/api/status` returns 404. Diagnosis: if `curl http://127.0.0.1:<port>/service-portal/api/status`
   cannot connect, the plugin is not loaded (that is different from "the portal is not started").
-  Fix: switch "DSH Service Portal" back on in the Plugins panel, or write
+  Fix: switch "dsh-service-portal" back on in the Plugins panel, or write
   `"dsh-service-portal"` back into `dsh.profile.bundles` of
   `~/.dsh/profiles/<profile>/package.json` and restart the host.
 - **Windows / macOS / Linux are all verified**, but `cloudflared` candidates are derived from the

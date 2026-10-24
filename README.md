@@ -161,7 +161,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 所以装完还要在宿主里把这条 bundle 打开，任选一种：
 
-- **应用内**：「插件」面板里找到「对外服务门户」，把开关打开（由应用内的插件管理器写入
+- **应用内**：「插件」面板里找到 `dsh-service-portal`，把开关打开（由应用内的插件管理器写入
   `dsh.profile.bundles`，并立刻生效，无需重启）；
 - **命令行**：`dsh plugin` 只转发 pnpm，**不能**改 bundles 名单，所以命令行没有等价操作；
   要改就编辑 `~/.dsh/profiles/<profile>/package.json` 的 `dsh.profile.bundles`
@@ -570,7 +570,7 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
 - **宿主升级后插件被静默跳过**：宿主只会加载 profile 清单 `dsh.profile.bundles` 里的 bundle。
   新版宿主重建 profile 清单时若漏掉这一条，本插件会**整体消失且不报错** —— 设置页没有这一项、
   `/service-portal/api/status` 返回 404。判据：`curl http://127.0.0.1:<端口>/service-portal/api/status`
-  连不上就是没加载（不是"没启动门户"）。处理：在「插件」面板里把「对外服务门户」重新打开，
+  连不上就是没加载（不是"没启动门户"）。处理：在「插件」面板里把 `dsh-service-portal` 重新打开，
   或把 `"dsh-service-portal"` 写回 `~/.dsh/profiles/<profile>/package.json` 的
   `dsh.profile.bundles` 后重启宿主。
 - **Windows / macOS / Linux 均已验证**：`cloudflared` 的探测路径按平台与常见安装位置推导，

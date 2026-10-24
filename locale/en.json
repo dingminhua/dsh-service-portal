@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "DSH Service Portal",
+    "title": "dsh-service-portal",
     "description": "Expose local services to the outside world: the settings page shows LAN and public QR codes you can scan to open the portal console, where you manage which services and routes are published (a cloudflared tunnel plus password login — the LAN side can stay password-free, the public side always requires one)."
   }
 }
