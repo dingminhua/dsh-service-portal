@@ -29,6 +29,7 @@ import http.server
 import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -399,6 +400,8 @@ class PortalHandler(BaseHTTPRequestHandler):
     rate_limiter = None         # RateLimiter
     # 上游查表：callable(path) -> (mount, host, port, rest_path) 或 None
     resolve_upstream = None
+    # 响应体里「根绝对路径」的改写开关（见 _rewrite_root_absolute）
+    rewrite_root_absolute = True
 
     # ---- 日志 ----
     def log_message(self, fmt, *args):
@@ -603,6 +606,92 @@ class PortalHandler(BaseHTTPRequestHandler):
     # ---- 转发 ----
     # ---- WebSocket 透传 ----
 
+    # ---- 响应改写：根绝对路径 → 带 mount 前缀 ----
+
+    # 需要改写 body 的内容类型（HTML/CSS 是引用资源的两种载体）。
+    # JS 不改：打包后的 JS 里通常是相对 import 与运行时拼的字符串，正则改写
+    # 风险大于收益；实测的那类白屏问题也都出在 index.html 的 /assets/ 引用上。
+    _REWRITE_TYPES = ("text/html", "application/xhtml+xml", "text/css")
+
+    # 只改这些属性/函数里以单个 / 开头、且**不**以 // 开头的路径。
+    # 排除 // 是为了不误伤协议相对 URL（//cdn.example.com/x.js）。
+    # 注意 `(?P<path>` 从斜杠**之后**开始：前缀要插在斜杠前，不是插在它后面
+    # （第一版写成属性里已含斜杠、再拼 prefix+raw，得到 /solverassets/... 这种坏路径）。
+    _ROOT_ABS_RE = re.compile(
+        r'(?P<attr>\b(?:src|href)\s*=\s*["\'])/(?![/\\])(?P<path>[^"\']*)'
+        r'|url\(\s*(?P<q>["\']?)/(?![/\\])(?P<csspath>[^"\')\s]*)(?P=q)(?P<close>\s*\))',
+        re.IGNORECASE)
+
+    def _should_rewrite(self, mount, content_type, body):
+        """这次响应要不要做根绝对路径改写？
+
+        只在**有 mount 前缀**时才有意义：挂在 /solver 下的站点，其 /assets/x.js
+        经门户访问会变成门户根的 /assets/x.js（那里没有），必须补成
+        /solver/assets/x.js。而门户根下的服务本就用不到这层改写。
+        """
+        if not type(self).rewrite_root_absolute:
+            return False
+        if not mount or mount == "/":
+            return False
+        if not body:
+            return False
+        ctype = (content_type or "").lower()
+        return any(t in ctype for t in self._REWRITE_TYPES)
+
+    @staticmethod
+    def _already_prefixed(raw, prefix):
+        """这个路径是否已经在 mount 里面（避免重复加前缀）。
+
+        raw 是**斜杠之后**的那段，所以已经带前缀的 /solver/ok 在 raw 里是
+        "solver/ok" —— 判断要拿它跟去掉前导斜杠的 prefix 比。
+        """
+        p = prefix.lstrip("/")
+        return raw == p or raw.startswith(p + "/")
+
+    def _rewrite_root_absolute(self, mount, content_type, body):
+        """把响应体里的根绝对引用补上 mount 前缀。
+
+        为什么必须由门户来做（而不是让用户去改上游网站）：
+        反向代理本来就该吞掉这类差异 —— nginx 的 `sub_filter` 就是干这个的。
+        要求用户改自己网站的 vite `base`，等于把代理的职责推给被代理方，
+        而且第三方/打包好的站点根本改不了。
+
+        只改"引用位置"（src / href / url()），不做全文替换：
+        全文替换会把 JS 字符串里的 "/api/x" 也改掉，那是数据不是引用，
+        改了就变成另一种坏法。
+        """
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return body                     # 非 UTF-8：不动，原样返回
+        if not text:
+            return body
+        prefix = mount.rstrip("/")
+
+        def repl(match):
+            attr = match.group("attr")
+            if attr is not None:
+                raw = match.group("path")
+                if raw is None:
+                    return match.group(0)
+                if self._already_prefixed(raw, prefix):
+                    return match.group(0)   # 已在 mount 内，不重复加
+                # attr 已含 `src="` 这类前缀（**不含**斜杠），补 `prefix/` 即可
+                return attr + prefix + "/" + raw
+            raw = match.group("csspath")
+            if raw is None:
+                return match.group(0)
+            if self._already_prefixed(raw, prefix):
+                return match.group(0)
+            quote = match.group("q") or ""
+            close = match.group("close") or ")"
+            return "url(%s%s/%s%s%s" % (quote, prefix, raw, quote, close)
+
+        new_text = self._ROOT_ABS_RE.sub(repl, text)
+        if new_text == text:
+            return body
+        return new_text.encode("utf-8")
+
     def _is_websocket_upgrade(self):
         """是不是 WebSocket 握手（Upgrade: websocket 且 Connection 含 upgrade）。"""
         if self.command not in ("GET", "POST"):
@@ -798,7 +887,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             # 未注册的路径：明确 404（不拿控制台兜底未知路径）
             return self._send(404, b"404 Not Found\n",
                               content_type="text/plain; charset=utf-8")
-        _, host, port, rest = resolved
+        # mount 必须留住：响应改写要用它补前缀（_should_rewrite / _rewrite_root_absolute）
+        mount, host, port, rest = resolved
 
         query = ""
         if "?" in self.path:
@@ -845,10 +935,24 @@ class PortalHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+        # 取上游的 content-type：改写判定要用它，且必须在发头之前算好。
+        upstream_ctype = response.getheader("Content-Type") or ""
+        rewritten = False
+        if self._should_rewrite(mount, upstream_ctype, data):
+            new_data = self._rewrite_root_absolute(mount, upstream_ctype, data)
+            if new_data is not data:
+                data = new_data
+                rewritten = True
+
         self.send_response(response.status)
         for key, value in response.getheaders():
             lower = key.lower()
             if lower in ("content-length", "connection", "transfer-encoding"):
+                continue
+            # 改写过的响应体里，原 ETag / Last-Modified 对应的是**未改写**的内容。
+            # 留着它们会让浏览器 304 复用旧版（仍指向 /assets/...），症状是
+            # 「代理明明改对了，用户刷新还是白屏」——必须一并丢掉。
+            if rewritten and lower in ("etag", "last-modified", "content-md5"):
                 continue
             if lower in ("content-type", "cache-control", "last-modified",
                          "etag", "content-disposition", "pragma", "expires",
@@ -931,6 +1035,9 @@ def make_portal_server(listen_port, config, listen_host="0.0.0.0"):
         "resolve_upstream": config.get("resolve_upstream"),
         "rate_limiter": config.get("rate_limiter"),
         "upstream_timeout": float(config.get("upstream_timeout", 60.0)),
+        # 默认开启：挂在 /xxx 下的站点常把资源写成根绝对路径（/assets/...），
+        # 经门户会被打到门户根而 404。这个开关把响应体里的这类引用补上前缀。
+        "rewrite_root_absolute": bool(config.get("rewrite_root_absolute", True)),
     }
     handler = type("BoundPortalHandler", (PortalHandler,), attrs)
     return _make_server_class()((listen_host, int(listen_port)), handler)

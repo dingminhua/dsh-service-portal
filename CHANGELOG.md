@@ -59,6 +59,64 @@
 - `getPortalJson`：门户在回退端口上时仍能取到服务清单（端到端复现 `fetch failed`）；
 - `waitForPortalPort`：配置端口空着、门户在回退端口，仍判定启动成功。
 
+### 同时修复：挂在 `/xxx` 下的站点，根绝对路径资源 404（页面白屏）
+
+同一个版本里还有一处会让人误以为是「端口问题」的表现：服务经门户**能打开页面**，
+但样式/脚本全丢，页面一片空白。
+
+#### 症状
+
+访问 `http://<门户>:8899/solver/` 返回 200、HTML 也确实拿到了，但页面不渲染。
+浏览器开发者工具里能看到大量 404：
+
+```
+GET http://<门户>:8899/assets/index-xxx.js   404
+GET http://<门户>:8899/assets/index-xxx.css  404
+```
+
+而这两个文件在上游明明存在 —— 直连 `http://127.0.0.1:5199/assets/...` 是 200。
+
+#### 根因：上游用根绝对路径引用资源，门户剥掉前缀后基准变了
+
+以 vite 默认配置打包的 SPA，`index.html` 里是**根绝对**路径：
+
+```html
+<script type="module" src="/assets/index-DR81-1IO.js"></script>
+<link rel="stylesheet" href="/assets/index-CAoatWP0.css">
+```
+
+门户按注册表把 `/solver/...` 剥掉前缀转发（`rest = /`），这本身是对的。
+但浏览器解析 `/assets/...` 时以**站点根**为基准，于是请求打到
+`http://<门户>:8899/assets/...` —— 门户根没有这些文件，404，React 挂不上，
+页面白屏。
+
+这**不该要求用户去改自己网站的 vite `base`**：反向代理本来就该吞掉这类差异
+（nginx 的 `sub_filter` 就是干这个的），而且第三方/已打包好的站点根本改不了。
+
+#### 修复
+
+在门户代理层做响应体改写（`tools/portal_proxy.py`）：
+
+- `_rewrite_root_absolute(mount, content_type, body)`：把 `src` / `href` / `url()`
+  里以单个 `/` 开头的路径补上 mount 前缀；
+- **只改"引用位置"**，不做全文替换 —— 全文替换会把 JS 字符串里的 `"/api/x"`
+  这类**数据**也改掉，那是另一种坏法；
+- 只对 `text/html`、`application/xhtml+xml`、`text/css` 生效，JSON/JS 一律不动；
+- `//cdn.example.com/x.js` 这类协议相对 URL 不误伤；
+- 已带 `/solver` 前缀的不重复加（`/solver/solver/...`）；
+- 改写过的响应**丢弃 ETag / Last-Modified**，否则浏览器 304 复用未改写的旧内容，
+  症状是「代理明明改对了，刷新还是白屏」；
+- 开关 `rewrite_root_absolute` 默认开启，可关。
+
+顺带修掉一处会让改写失效的解包：`_proxy` 里原本是 `_, host, port, rest = resolved`，
+把 `mount` 丢掉了，改写需要它才知道前缀。
+
+#### 检验
+
+`tools/check_portal_proxy.py` 新增 9 项（含反例控制）：HTML 的 `src`/`href` 补前缀、
+协议相对 URL 不动、已带前缀不重复加、ETag 被丢弃、CSS 的 `url()` 补前缀且括号不重复、
+JSON 正文不被改写、门户控制台（根路径）不参与改写。
+
 ## 1.0.6 (2026-10-24)
 
 **插件在宿主清单里改用包名 `dsh-service-portal`，与包管理器、市场条目保持同一个称呼。**

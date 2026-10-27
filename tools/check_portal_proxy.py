@@ -370,6 +370,97 @@ def main():
     check("502 里带上游地址便于排查",
           b"127.0.0.1:1" in body, "body=%r" % body[:60])
 
+    # ---- 根绝对路径改写：挂在 /xxx 下的站点，其 /assets/... 必须能经门户取到 ----
+    #
+    # 现场（2026-10-28）：上游是个 vite 打包的 SPA，dist/index.html 写的是
+    #   <script src="/assets/index-xxx.js">
+    # 经门户 /solver/ 打开时，浏览器按**站点根**解析，于是请求
+    # http://<门户>/assets/index-xxx.js —— 门户根没有这个文件，404，页面白屏。
+    # 反向代理本该吞掉这类差异（nginx 的 sub_filter 就是干这个的），
+    # 不能要求用户去改自己网站的 vite base。
+    import http.server as _hs
+
+    class RewriteUpstream(_hs.BaseHTTPRequestHandler):
+        """按路径回不同 Content-Type 的上游，用来验证改写只发生在该改的地方。"""
+        HTML = (b'<script type="module" src="/assets/app.js"></script>'
+                b'<link rel="stylesheet" href="/assets/app.css">'
+                b'<a href="//cdn.example.com/x.js">cdn</a>'
+                b'<a href="/solver/already">ok</a>')
+        CSS = b'a{background:url(/img/bg.png)} b{background:url("/img/b2.png")}'
+        JSON_BODY = b'{"path":"/assets/not-a-reference"}'
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path.endswith(".css"):
+                body, ctype = self.CSS, "text/css; charset=utf-8"
+            elif path.endswith(".json"):
+                body, ctype = self.JSON_BODY, "application/json"
+            else:
+                body, ctype = self.HTML, "text/html; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", '"deadbeef"')      # 改写后必须被丢掉
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    rw_up = _hs.ThreadingHTTPServer(("127.0.0.1", 0), RewriteUpstream)
+    threading.Thread(target=rw_up.serve_forever, daemon=True).start()
+    rw_port = rw_up.server_address[1]
+
+    rw_config = {
+        "password": PASSWORD,
+        "cookie_secure": False,
+        "open_classes": ("loopback", "lan"),
+        "console_state": fake_console_state,
+        "console_page": fake_console_page,
+        "api_handler": fake_api,
+        "resolve_upstream": make_resolver({"/solver": "127.0.0.1:%d" % rw_port}),
+        "rate_limiter": portal_proxy.RateLimiter(),
+    }
+    rw_server = portal_proxy.make_portal_server(0, rw_config)
+    threading.Thread(target=rw_server.serve_forever, daemon=True).start()
+    rw_srv_port = rw_server.server_address[1]
+
+    status, body, headers = request(rw_srv_port, "/solver/", host="192.168.1.5:8899")
+    text = body.decode("utf-8", "replace")
+    check("HTML 里 /assets/ 引用被补上 mount 前缀",
+          'src="/solver/assets/app.js"' in text, "body=%r" % text[:120])
+    check("HTML 里 href 也被补前缀",
+          'href="/solver/assets/app.css"' in text, "body=%r" % text[:120])
+    check("协议相对 URL（//cdn...）不被误改",
+          'href="//cdn.example.com/x.js"' in text, "body=%r" % text[:120])
+    check("已带 mount 前缀的路径不重复加",
+          'href="/solver/already"' in text and "/solver/solver/" not in text,
+          "body=%r" % text[:120])
+    check("改写后 ETag 被丢弃（避免 304 复用未改写内容）",
+          headers.get("ETag") is None, "etag=%r" % headers.get("ETag"))
+
+    status, body, _ = request(rw_srv_port, "/solver/app.css", host="192.168.1.5:8899")
+    css = body.decode("utf-8", "replace")
+    check("CSS 的 url(/img/..) 被补前缀",
+          "url(/solver/img/bg.png)" in css, "css=%r" % css[:120])
+    check("CSS 带引号的 url 也被补，且括号不重复",
+          'url("/solver/img/b2.png")' in css, "css=%r" % css[:120])
+
+    status, body, _ = request(rw_srv_port, "/solver/x.json", host="192.168.1.5:8899")
+    check("JSON 正文里的 /assets/ 不被改写（那是数据不是引用）",
+          b"/assets/not-a-reference" in body, "body=%r" % body[:80])
+
+    # 反例控制：改写只发生在**有 mount 前缀**的转发上。根路径请求（控制台）
+    # 不该被改动 —— 否则控制台自己的引用就可能被莫名加上前缀。
+    status, body, _ = request(rw_srv_port, "/", host="192.168.1.5:8899")
+    check("门户控制台（根路径）不参与改写",
+          b"/solver/" not in body, "body=%r" % body[:120])
+
+    rw_server.shutdown()
+    rw_server.server_close()
+    rw_up.shutdown()
+    rw_up.server_close()
+
     for srv in (server, server2, server3, upstream):
         srv.shutdown()
         srv.server_close()
