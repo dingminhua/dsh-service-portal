@@ -1677,3 +1677,86 @@ test("client：缺前置条件时渲染提示（不是等用户点了才失败�
   assert.ok(/prereqs\.python/.test(src) && /prereqs\.cloudflared/.test(src),
     "python 与 cloudflared 要分别呈现 —— 严重程度不同");
 });
+
+// ---------------------------------------------------------------------------
+// 端口回退：门户实际监听的端口 ≠ 配置端口时，转发必须打到**真正在听**的那个
+//
+// 现场（实测，2026-10-28）：配置是 8899，启动时 8899 被占用，启动器自动换到
+// 8900 并把 8900 写进 portal_state.json。界面因此显示「运行中、内网地址 8900」，
+// 但 `/_api/services` 等转发仍按配置端口 8899 发请求 —— 那里没人听，于是
+// 报 `TypeError: fetch failed` /「连不上门户进程」，服务清单整块哑掉。
+//
+// 这是最坏的一类 bug：不崩、界面还说运行中，功能全废。下面四条检验分别锁住
+// 「解析真实端口」「转发走真实端口」「启动判定认回退端口」。
+// ---------------------------------------------------------------------------
+test("livePortalPort：状态文件记录的端口在听 → 用它，而不是配置端口", async () => {
+  // 关键：配置端口（8899 的等价物）必须**真的没人听**，否则本检验区分不了
+  // 「碰巧读对了」和「一直用配置端口」。closedPort() 保证这一点。
+  const deadPort = await closedPort();
+  const { server, port: livePort } = await fakeRunningPortal();
+  const root = portalRepo({ portal_port: livePort, password: "pw", lan_urls: [], services: [] });
+  try {
+    const port = await _internals.livePortalPort({
+      infraPath: root, repoPath: root, portalPort: deadPort,
+    });
+    assert.equal(port, livePort,
+      `转发端口必须是真正在听的 ${livePort}，不能是配置端口 ${deadPort}`
+      + `（用配置端口就会 fetch failed / 连不上门户进程）`);
+  } finally {
+    try { server.close(); } catch { /* 已关 */ }
+    rmTemp(root);
+  }
+});
+
+test("livePortalPort：状态文件的端口没在听 → 回落配置端口（别信残留）", async () => {
+  // 反例控制：状态文件可能是上一轮残留（进程早没了）。那时若还照它转发，
+  // 就是打到一个空端口上 —— 与上面那条必须产生可区分的结论。
+  const deadState = await closedPort();
+  const configured = await closedPort();
+  const root = portalRepo({ portal_port: deadState, password: "pw", lan_urls: [], services: [] });
+  try {
+    const port = await _internals.livePortalPort({
+      infraPath: root, repoPath: root, portalPort: configured,
+    });
+    assert.equal(port, configured,
+      "状态文件端口不在听时必须回落配置端口，不能盲信残留");
+  } finally {
+    rmTemp(root);
+  }
+});
+
+test("getPortalJson：门户在回退端口上时，服务清单仍能取到（回归 fetch failed）", async () => {
+  // 端到端复现用户报的「连不上门户进程（.../_api/services）：TypeError: fetch failed」。
+  // 假门户只在一个随机端口上听，配置端口指向一个确定没人听的端口。
+  const deadPort = await closedPort();
+  const { server, port: livePort } = await fakeRunningPortal();
+  const root = portalRepo({ portal_port: livePort, password: "pw", lan_urls: [], services: [] });
+  try {
+    const payload = await _internals.getPortalJson(
+      { infraPath: root, repoPath: root, portalPort: deadPort }, "/_api/services");
+    assert.equal(payload.ok, true,
+      `必须打到真正在听的 ${livePort}，实际失败：${payload.error ?? ""}`);
+    assert.ok(!String(payload.error ?? "").includes("连不上门户进程"),
+      "不得再出现「连不上门户进程」—— 门户明明活着");
+  } finally {
+    try { server.close(); } catch { /* 已关 */ }
+    rmTemp(root);
+  }
+});
+
+test("waitForPortalPort：配置端口空着、门户在回退端口 → 仍判定启动成功", async () => {
+  const deadPort = await closedPort();
+  // 门户监听在 deadPort + 1（与启动器的「往后试」一致）
+  const server = createHttpServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end("{}");
+  });
+  await new Promise((done) => server.listen(deadPort + 1, "127.0.0.1", done));
+  try {
+    const found = await _internals.waitForPortalPort(deadPort, 4000);
+    assert.equal(found, deadPort + 1,
+      "回退端口上的门户必须被认出来，否则界面报「启动失败」而进程其实活着");
+  } finally {
+    await new Promise((done) => server.close(done));
+  }
+});

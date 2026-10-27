@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.0.7 (2026-10-28)
+
+**修复「连不上门户进程（`/_api/services`）：`TypeError: fetch failed`」——
+配置端口被占用时，门户自动后移到别的端口，而插件转发仍打原端口。**
+
+### 症状
+
+设置页显示「运行中」、内网地址也正常，但服务清单整块空掉，接口回 502：
+
+```json
+{
+  "ok": false,
+  "error": "连不上门户进程（http://127.0.0.1:8899/_api/services）：TypeError: fetch failed"
+}
+```
+
+服务清单、增删服务、改局域网/公网口令、二维码、隧道启停、停止门户——**全都用不了**，
+而界面上顶着一个「运行中」。这是本项目最忌讳的「不崩，但只给错误答案」。
+
+### 根因：启动器会为「端口被占用」自动后移，转发却没跟上
+
+`tools/portal_run.py` 绑定端口时，若遇到 `EADDRINUSE` 会**自动往后试 5 个**
+（`bind_attempts`），并把真正监听到的端口写进 `runs/portal_state.json` 的
+`portal_port`。实测现场：
+
+| 事实 | 取值 |
+| :--- | :--- |
+| 配置端口（`portalPort` 未配置 → `DEFAULT_PORTAL_PORT`） | 8899 |
+| 进程命令行 | `portal_run.py --port 8899` |
+| 实际监听 | **8900**（日志：`端口 8899 已被占用，换 8900 试试…`） |
+| 状态文件 `portal_port` | 8900 |
+
+`readStatus` 读的是状态文件，所以界面**正确地**报了 8900；但
+`getPortalJson` / `postPortalJson` / `startTunnelOnly` / `stopTunnelOnly` /
+`fetchPortalQr` / `stopPublic` 都直接取配置端口 8899 发请求 ——
+那里根本没有东西在听，于是 `fetch failed`。
+
+### 修复
+
+新增 `livePortalPort(repo)`：取**状态文件记录的端口，且必须在监听**；
+状态文件可能是上一轮残留，所以没在听就回落配置端口，绝不盲信。
+
+- `getPortalJson` / `postPortalJson` / `startTunnelOnly` / `stopTunnelOnly` /
+  `fetchPortalQr` / `stopPublic` 共 **6 处转发点**改用它。
+- 新增 `waitForPortalPort(port, timeoutMs)`：启动判定把「配置端口及其后 5 个」
+  都算成功，返回真正开始监听的那个端口。此前只看配置端口，会得出
+  「45 秒内没开始监听」并报启动失败，**而门户其实已经在 8900 上跑着**。
+- 失败文案同步改为「`${port}` 及其后 5 个端口在 45 秒内都没有开始监听」。
+
+### 检验
+
+`test/host.test.mjs` 新增 4 条，全部使用 `closedPort()` 确保「配置端口确实没人听」，
+使「读对了真实端口」与「一直在用配置端口」产生可区分的结果：
+
+- `livePortalPort`：状态文件端口在听 → 用它；
+- `livePortalPort`：状态文件端口没在听 → 回落配置端口（反例控制）；
+- `getPortalJson`：门户在回退端口上时仍能取到服务清单（端到端复现 `fetch failed`）；
+- `waitForPortalPort`：配置端口空着、门户在回退端口，仍判定启动成功。
+
 ## 1.0.6 (2026-10-24)
 
 **插件在宿主清单里改用包名 `dsh-service-portal`，与包管理器、市场条目保持同一个称呼。**
