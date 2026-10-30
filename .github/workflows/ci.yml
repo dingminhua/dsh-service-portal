@@ -56,5 +56,11 @@ jobs:
         # 门禁组需要宿主运行时，CI 里没有 DSH，会明确 skip —— 这是设计，不是失败。
         run: node --test test/manifest.test.mjs
 
+      - name: Host contract checks
+        # 槽位目录 / stdout 纪律 / core 依赖对账。需要宿主运行时的项在 CI 里
+        # 明确 skip（没有 DSH）；stdout 纪律与"检测器自身有效"两条**必须真跑**，
+        # 它们不依赖宿主 —— 这两条才是 CI 能拦住的那部分。
+        run: node --test test/host-contract.test.mjs
+
       - name: Verify package contents
         run: npm pack --dry-run

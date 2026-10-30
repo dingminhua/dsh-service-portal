@@ -18,8 +18,16 @@
 cd D:/DshProject/dsh-service-portal
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
 & $node client/build.mjs            # 重建客户端产物
-& $node --test test/host.test.mjs   # 55 项宿主端控制检验
-& $node --test test/client.test.mjs # 28 项客户端契约检验
+& $node --test test/host.test.mjs   # 91 项宿主端控制检验
+& $node --test test/client.test.mjs # 42 项客户端契约检验
+
+# 与宿主接口对账（推荐每次发布都跑）：清单门禁 + 槽位目录/stdout/依赖契约。
+# 宿主在 app.asar 里，普通 node 读不到 —— 用宿主自带的 Electron 当 node 用。
+$app = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources"
+$env:DSH_APP_BOOT = "$app\app.asar\dsh\node_modules\@deepseek-ai\dsh-app-boot"
+$env:ELECTRON_RUN_AS_NODE = "1"
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\DeepSeek Harness.exe" `
+  --test test/manifest.test.mjs test/host-contract.test.mjs
 grep -F "Copyright (c) 2026 LaoDing" LICENSE
 ```
 

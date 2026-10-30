@@ -24,69 +24,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import { loadHost } from "./lib/host-runtime.mjs";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
-/**
- * 宿主 app-boot 的候选入口。
- *
- * 优先级：显式 DSH_APP_BOOT（`<dsh根>/node_modules/@deepseek-ai/dsh-app-boot` 或
- * 该包目录本身）→ DSH_RUNTIME_ROOT / DSH_DSH_ROOT 推出的同一路径 → 普通包解析。
- * 桌面应用把运行时放在 app.asar 解包后的 `dsh/` 下，所以不写死任何绝对路径。
- *
- * 注意：这里必须解析到**模块入口**，不能 import 包的 package.json
- * （JSON 模块需要 `with { type: "json" }`，会抛 ERR_IMPORT_ATTRIBUTE_MISSING）。
- * @returns {string[]} 可直接 import 的模块 URL
- */
-function candidateAppBoots() {
-  /** 把一个可能的 app-boot 目录换成它的 ESM 入口；目录里没有 exports 时退回 lib/index.js。 */
-  const entryOf = (dir) => {
-    try {
-      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
-      const exported = pkg.exports?.["."];
-      const rel = typeof exported === "string"
-        ? exported
-        : exported?.import?.default ?? exported?.import ?? exported?.default;
-      if (typeof rel === "string") return pathToFileURL(resolve(dir, rel)).href;
-    } catch { /* 下面走默认入口 */ }
-    return pathToFileURL(join(dir, "lib", "index.js")).href;
-  };
+// 宿主的定位与解析基准统一来自 test/lib/host-runtime.mjs —— 另一个套件
+// （test/host-contract.test.mjs）也要用同一套候选路径，两处各写一份迟早分叉。
+const loaded = await loadHost();
 
-  const bases = [];
-  if (process.env.DSH_APP_BOOT) bases.push(entryOf(resolve(process.env.DSH_APP_BOOT)));
-  for (const root of [process.env.DSH_RUNTIME_ROOT, process.env.DSH_DSH_ROOT]) {
-    if (!root) continue;
-    bases.push(entryOf(join(root, "node_modules", "@deepseek-ai", "dsh-app-boot")));
-  }
-  return bases;
-}
-
-/**
- * 载入宿主真实的兼容性判定。
- * @returns {Promise<{evaluatePluginCompatibility: Function, getDshRuntimeVersion: Function}|undefined>}
- *   找不到宿主时 undefined（调用方据此 skip，而不是假装通过）
- */
-async function loadHostCompatibility() {
-  for (const base of candidateAppBoots()) {
-    try {
-      const mod = await import(base);
-      if (typeof mod.evaluatePluginCompatibility === "function") return mod;
-    } catch { /* 换下一个候选 */ }
-  }
-
-  // 普通包解析：在 DSH 自带 Node 下跑 `node --test` 时命中。
-  try {
-    const mod = await import("@deepseek-ai/dsh-app-boot");
-    if (typeof mod.evaluatePluginCompatibility === "function") return mod;
-  } catch { /* 宿主不在解析路径上 */ }
-
-  return undefined;
-}
-
-const host = await loadHostCompatibility();
+const host = loaded?.mod;
 const skipReason = host === undefined
   ? "找不到宿主 @deepseek-ai/dsh-app-boot；用 DSH_APP_BOOT=<dsh根> 指定后重跑"
   : false;

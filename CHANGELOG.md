@@ -1,5 +1,87 @@
 # Changelog
 
+## 1.0.8 (2026-10-30)
+
+**跟随宿主升级：DSH 0.2.1-rc.3 → rc.5。插件代码零改动，但把「宿主悄悄改了怎么办」
+这件事从人工复核变成了可执行检验。**
+
+宿主升到 **0.2.1-rc.5**（正式版 `DeepSeek Harness.app`，rc.3 → rc.4 → rc.5 连着三次发布）。
+先把三次发布的代码改动逐个看完，再逐项核对本插件依赖的接口 —— 结论是**一处都不用改**。
+不过「这次刚好没改」不是可持续的保障，所以这一版补了一套对上账的检验。
+
+### 宿主这一版改了什么
+
+rc.3 → rc.5 的全部代码改动只有 12 个文件（其余是各包版本号）：
+
+| 宿主改动 | 涉及文件 | 与本插件的关系 |
+| :--- | :--- | :--- |
+| 推理 Body Slot 新增 `rawText`，`text` 改为显示文本 | `ui-chat` 的 `slots.ts` / `ReasoningRow.tsx` / `reasoning-text.ts` | 不涉及：本插件不注册会话侧槽位 |
+| 会话页签 tooltip 只在文字溢出时出现；「更多视图」文案去掉当前项 | `ui-conversation` 的 `ConversationSession.tsx` / `locales.ts` | 不涉及（纯 UI 行为） |
+| DeepSeek 账号目录、MCP 资源列表的诊断从 **stdout 挪到 stderr** | `llm-deepseek-account` / `mcp-client` | **同一条纪律**：见下节 |
+| 动态客户端 runner 的槽位目录只更新了源码行号 | `cordis-client-runner` | 不涉及 |
+
+宿主还发了一份 `docs/upgrade-guide/v0.2.1-rc.4/reasoning-body-props/` 迁移指南 ——
+它影响的正是 rc.3 之后注册 `conversation.chat.reasoning.body` 的自定义推理渲染器，
+本插件不在此列。
+
+### 逐项复核：插件依赖的接口都没变
+
+| 插件用到的 | rc.5 实测 |
+| :--- | :--- |
+| `plugins.bundle.config` / `plugins.row.config` 槽位 | 仍是 `keyed` / `root` / `key` 必填；行键格式仍是 `<包名>#<行 id>` |
+| `webServer.register({kind:'prefix', path, handler})` | 未变（`WebServer.register` 的 `exact`/`prefixes` 两表与 disposer 语义一致） |
+| `Config`（schemastery `z.object` + `volatile()`） | 未变；宿主随包分发 schemastery 3.18.5、cordis 4.0.5，均在本插件声明的区间内 |
+| `dsh.client` 清单字段 + `exports["./client"]` | 未变（客户端产物仍走 `__ModuleLoader__.load({id, factory})`） |
+| locale 词典（`<包名>/locale/en.json`） | 未变（宿主 `readPluginMeta()` 仍按包名解析） |
+| `engines.dsh` 版本门禁 | 未变：rc.5 判本插件相容；profile 级 `readProfileCompatibility()` 无告警、无豁免 |
+
+运行时实测（不是读代码推断）：宿主 `getDshRuntimeVersion()` 返回 `0.2.1-rc.5`，
+`evaluatePluginCompatibility()` 返回 `undefined`（= 无不相容项），
+`readPluginMeta("dsh-service-portal")` 取到了中英文标题、简介与内联图标。
+运行中的插件接口照常：`GET /service-portal/api/status` 返回真实状态（门户在跑、
+pid、内网地址、口令形态、前置条件），`GET /api/qr` 返回二维码，`POST /api/settings` 正常。
+
+### 新增：宿主契约检验（`test/host-contract.test.mjs`，9 项）
+
+原来的 `test/manifest.test.mjs` 只回答「宿主认不认这份清单」。它答不了另一半：
+**「插件注册的槽位、挂的路由、依赖的 core 版本，宿主这版还给不给」**。
+而这一半恰恰是静默失败的重灾区（本仓库栽过两次：注册到不存在的槽位 → 插件页空白无报错；
+bundle 不在 profile 名单 → 插件根本没加载，接口 404）。
+
+新增套件的做法是**读宿主自己写下的契约**，而不是复述文档：
+
+- **槽位目录对账**：读宿主随包分发的 `CLIENT_SLOT_API`（`cordis-client-runner/client`），
+  确认两个配置槽位仍是 `keyed` / `root` / `key` 必填，并确认行键格式 `<包名>#<行 id>` 没变；
+- **行为对账**：真跑插件产物的 `apply(ctx)`，把 `ctx.slots.register` 收到的**每个**槽位名
+  拿去宿主的目录里查 —— 名字对不上就红。这条覆盖的是"新加了槽位但宿主已改名"的未来情况，
+  不靠人记得同步；
+- **stdout 纪律**：`lib/index.js` / `lib/client.js` / `client/index.jsx` 里不许出现
+  `console.log` / `console.info` / `process.stdout.write`，`spawn` 的 `stdio` 不许 `inherit`。
+  理由是 rc.4 那组修复揭示的失败形态：ACP 运行线把 stdout 留给 JSON-RPC，
+  一条 `console.log` 会让**整条会话无响应**，而错误信息本身并不会出现；
+- **core 版本对账**：宿主随包分发的 cordis / schemastery 必须仍在插件声明的区间内
+  （`engines.dsh` 只管 DSH 版本，管不到 core 依赖 —— 这类漂移不会被门禁拦住）。
+
+每条断言都配了反例，实测确认它们**会红**：
+
+| 反证 | 结果 |
+| :--- | :--- |
+| 把插件注册的槽位名改成 `...renamed` | 行为对账精确报出两个对不上的槽位名 |
+| 往 `lib/index.js` 追加一行 `console.log` | stdout 纪律报 `["console.log()"]` |
+| 把 `engines.dsh` 下界改成 `>=0.2.1-rc.6` | 清单门禁 3 项翻转（正例、区间、peer 忽略） |
+
+顺带把宿主定位逻辑抽到 `test/lib/host-runtime.mjs`：两个套件共用同一份候选路径与解析基准。
+此前只有 `manifest.test.mjs` 自己找宿主，第二份迟早会分叉 —— 一处认 `app.asar`、
+一处认解包目录，于是同一台机器上一个套件跑满、另一个全 skip，而输出都"绿"。
+
+### 检验
+
+| 项 | 结果 |
+| :--- | :--- |
+| `npm test`（4 个套件） | 156 项：146 通过 / 0 失败 / 10 skip（skip 的是需要宿主运行时的项） |
+| 对着 rc.5 真实运行时跑 `manifest` + `host-contract` | 23/23 通过，0 skip |
+| `readProfileCompatibility()`（整个 profile） | 无告警、无豁免 |
+
 ## 1.0.7 (2026-10-28)
 
 **修复「连不上门户进程（`/_api/services`）：`TypeError: fetch failed`」——

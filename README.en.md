@@ -219,8 +219,10 @@ python -X utf8 tools\check_plugin.py
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 55 host-side control checks
-& $node --test test/client.test.mjs    # 28 client distribution contract checks
+& $node --test test/host.test.mjs          # 91 host-side control checks
+& $node --test test/client.test.mjs        # 42 client distribution contract checks
+& $node --test test/manifest.test.mjs      # 14 manifest + version-gate checks (needs the host runtime)
+& $node --test test/host-contract.test.mjs # 9 host-contract checks (slots/stdout/deps; needs the host runtime)
 
 # End-to-end acceptance: launches the real portal process and verifies
 # LAN-is-free / public-needs-password / console-manages-services / rate limit / health
@@ -295,6 +297,8 @@ Marketplace cards and README badges are two separate mechanisms:
   This is a deliberate trade-off (scan-and-go convenience) and the UI states it plainly.
 - **Node >= 24 and host API version**: the plugin needs DSH's `webServer` / `settings` capabilities.
   When a host lacks them the plugin fails closed (mounts no routes) instead of half-working.
+  Verified against DSH **0.2.1-rc.5**; `npm run test:manifest` and `npm run test:contract` check the
+  version gate and the host slot catalog (both skip loudly rather than pass when no host is found).
 - **The host silently skips the plugin after an upgrade**: the host only loads bundles listed in
   the profile manifest's `dsh.profile.bundles`. If a newer host rewrites that manifest without
   this entry, the plugin **disappears entirely and logs nothing** — no settings entry, and

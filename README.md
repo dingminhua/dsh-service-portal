@@ -73,7 +73,7 @@
 - **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
 - **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点；
   健康检查是**真探测**（TCP 连上游端口），不是标记位。
-- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 83 项 Node
+- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 156 项 Node
   检验；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
 
 ## 界面
@@ -186,23 +186,45 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 新版宿主（0.2.1-rc.1 起）的判定顺序是：有 `engines.dsh` 就只看它；没有才逐个检查
 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer。两条都不写 = 任何版本都放行。
 
-> 升级 DSH 大版本时，先跑 `npm run test:manifest`。它会调用**宿主自己的**
-> `evaluatePluginCompatibility()` 判定本插件，同时用反例确认判定逻辑确实生效；
-> 找不到宿主运行时则明确 skip（`DSH_APP_BOOT=<dsh 根目录>` 可显式指定），不会假装通过。
+> 升级 DSH 大版本时，先跑 `npm run test:manifest` 与 `npm run test:contract`。
+> 前者调用**宿主自己的** `evaluatePluginCompatibility()` 判定本插件；
+> 后者读**宿主随包分发的槽位目录**，逐个核对插件注册的槽位还在不在、形状变没变。
+> 两条都用反例确认判定确实生效；找不到宿主运行时则明确 skip
+> （`DSH_APP_BOOT=<dsh 根目录>` 可显式指定），不会假装通过。
 
-**已验证的宿主版本**：DSH **0.2.1-rc.3**（正式版 `DeepSeek Harness.app`）。
-0.2.1-rc.2 → rc.3 的改动集中在导航/面板入口自定义（新增 `ui-entry-customization`
-与三个 `*.actions` 槽位）、埋点事件、以及 DeepSeek API Key 的 `/models` 列表路由，
-**没有触碰本插件用到的任何接口**：`plugins.bundle.config` / `plugins.row.config`
-两个槽位的注册契约、`webServer.register({kind:'prefix'})`、`Config`（schemastery）
-投影、`dsh.client` 清单字段，全部未变。
+**已验证的宿主版本**：DSH **0.2.1-rc.5**（正式版 `DeepSeek Harness.app`）。
+
+宿主 rc.3 → rc.5 的全部代码改动只有 12 个文件，**没有触及本插件用到的任何接口**：
+
+| 宿主这一版改了什么 | 与本插件的关系 |
+| :--- | :--- |
+| 推理 Body Slot 新增 `rawText`（`conversation.chat.reasoning.body`） | 不涉及：本插件不注册会话侧的槽位 |
+| 会话页签 tooltip 只在文字溢出时出现（纯 UI 行为） | 不涉及 |
+| DeepSeek 账号目录、MCP 资源列表的诊断从 **stdout 挪到 stderr** | **同一条纪律**：本插件运行期本来就不写 stdout（见下） |
+
+本插件依赖的接口逐项复核，全部未变：
+
+| 插件用到的 | rc.5 现状 |
+| :--- | :--- |
+| `plugins.bundle.config` / `plugins.row.config` 槽位 | 仍是 `keyed` / `root` / `key` 必填，键仍是 `<包名>#<行 id>` |
+| `webServer.register({kind:'prefix', path, handler})` | 未变（`dsh-host-webserver` 的路由契约一致） |
+| `Config`（schemastery `z.object` + `volatile()`） | 未变；宿主随包分发的 schemastery 3.18.5 在插件区间内 |
+| `dsh.client` 清单字段（`platform: web` + `exports["./client"]`） | 未变 |
+| `engines.dsh` 版本门禁 | 未变（rc.5 判定本插件相容，profile 级兼容检查亦无告警） |
+
+宿主 rc.4 的那组改动值得单独记一笔，因为它是一种**新的失败形态**：
+ACP 运行线把 **stdout 留给 JSON-RPC 协议**，任何 `console.log` 都会插进协议流，
+表现是"整条会话无响应"而不是一条明显的报错。本插件在这条线上一直是干净的
+（日志走 `ctx.logger`，客户端走 `console.error`，子进程一律重定向到文件或管道），
+但从 1.0.8 起有检验把它钉住 —— 不再依赖"当时写对了"。
 
 ```bash
-# 用宿主自己的运行时跑门禁检验（rc.3 实测 10/10 通过）。
+# 用宿主自己的运行时跑两个宿主相关套件（rc.5 实测 23/23 通过）。
 # 注意：宿主装在 app.asar 里，普通 node 读不到 —— 用宿主自带的 Electron 当 node 用。
 APP="/Applications/DeepSeek Harness.app/Contents/Resources"
 DSH_APP_BOOT="$APP/app.asar/dsh/node_modules/@deepseek-ai/dsh-app-boot" \
-ELECTRON_RUN_AS_NODE=1 "$APP/../MacOS/DeepSeek Harness" --test test/manifest.test.mjs
+ELECTRON_RUN_AS_NODE=1 "$APP/../MacOS/DeepSeek Harness" \
+  --test test/manifest.test.mjs test/host-contract.test.mjs
 ```
 
 ## 配置（DSH 设置页）
@@ -400,8 +422,10 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 55 项宿主端控制检验
-& $node --test test/client.test.mjs    # 28 项客户端分发契约检验
+& $node --test test/host.test.mjs         # 91 项宿主端控制检验
+& $node --test test/client.test.mjs       # 42 项客户端分发契约检验
+& $node --test test/manifest.test.mjs     # 14 项清单与版本门禁（需宿主运行时）
+& $node --test test/host-contract.test.mjs # 9 项宿主契约（槽位/stdout/依赖，需宿主运行时）
 
 # Python 控制检验
 python -X utf8 tools\check_portal_bind.py
@@ -497,8 +521,10 @@ cloudflared 隧道域名（你发出去的地址就废了）。所以另起一�
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --test test/host.test.mjs      # 55 项宿主端控制检验
-& $node --test test/client.test.mjs    # 28 项客户端分发契约检验
+& $node --test test/host.test.mjs         # 91 项宿主端控制检验
+& $node --test test/client.test.mjs       # 42 项客户端分发契约检验
+& $node --test test/manifest.test.mjs     # 14 项清单与版本门禁（需宿主运行时）
+& $node --test test/host-contract.test.mjs # 9 项宿主契约（槽位/stdout/依赖，需宿主运行时）
 
 # 端到端验收：真起门户进程，逐条验证「内网免密/外网口令/页面管理服务/限速/健康检查」
 python -X utf8 test\acceptance_portal.py    # 30 项
