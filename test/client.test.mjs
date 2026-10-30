@@ -554,11 +554,32 @@ test("设计契约：不用 0.5px 描边（DPR=1 下会被抹成 1px，写它等
     "出现 0.5px 描边声明；实测在 DPR=1 下渲染成 1px，与宿主尺度不一致。实际=" + JSON.stringify(decls));
 });
 
+// 按钮的**几何**规则 = 那条把几个变体联合起来的组选择器
+// （`.dsp-btn,.dsp-btn-primary,.dsp-btn-ghost,.dsp-btn-danger,.dsp-btn-outline{…}`）。
+// 这里不钉死变体的**清单**（加一个 .dsp-btn-outline 就把测试改一遍，是钉形状不是钉语义），
+// 只要求：联合选择器里同时出现 .dsp-btn 与 .dsp-btn-primary，且这条规则带 height。
+// 为什么必须走联合选择器：本轮之前的真 bug 是"整条 .dsp-btn-primary 被 CSS 注释
+// 吃掉"，结果主按钮透明。几何写在联合选择器里、底色写在各自规则里，
+// 任何一条变体挂掉都只影响那一个变体。
+function btnBaseRule(css) {
+  for (const m of css.matchAll(/([^{}]*\.dsp-btn[^{}]*)\{([^}]*)\}/g)) {
+    const sel = m[1];
+    if (/:|\.dsp-btn-sm|\.is-disabled/.test(sel)) continue; // 状态档/紧凑档不算基础几何
+    if (!/\.dsp-btn\s*[,{]/.test(sel + "{")) continue;
+    if (!sel.includes(".dsp-btn-primary")) continue;
+    if (!/\bheight:/.test(m[2])) continue;
+    return { sel: sel.trim(), body: m[2] };
+  }
+  return null;
+}
+
 test("设计契约：按钮只用宿主的 36 / 28 两档高度", () => {
   // .dsp-btn 默认档 = 宿主 .button.md（36），.dsp-btn-sm = 宿主 .sm（28）
   const css = cssDecls(bundle);
-  const m = css.match(/\.dsp-btn,\.dsp-btn-primary,\.dsp-btn-ghost,\.dsp-btn-danger\{[^}]*height:(\d+)px/);
-  assert.ok(m, "找不到 .dsp-btn 的高度声明（选择器被改过？）");
+  const base = btnBaseRule(css);
+  assert.ok(base, "找不到 .dsp-btn 的联合几何规则（选择器被改过？）");
+  const m = /height:(\d+)px/.exec(base.body);
+  assert.ok(m, "联合几何规则里没有 height 声明");
   assert.equal(m[1], "36", "默认按钮高度必须是宿主的 36 档；实际=" + m[1]);
   const sm = css.match(/\.dsp-btn-sm\{[^}]*height:(\d+)px/);
   assert.ok(sm, "找不到 .dsp-btn-sm 的高度声明");
@@ -567,11 +588,102 @@ test("设计契约：按钮只用宿主的 36 / 28 两档高度", () => {
 
 test("设计契约：默认按钮不描边（宿主的 .button 是 border:none，靠底色分级）", () => {
   const css = cssDecls(bundle);
-  const m = css.match(/\.dsp-btn,\.dsp-btn-primary,\.dsp-btn-ghost,\.dsp-btn-danger\{([^}]*)\}/);
-  assert.ok(m, "找不到 .dsp-btn 基础规则");
-  assert.ok(/\bborder:none\b/.test(m[1]),
+  const base = btnBaseRule(css);
+  assert.ok(base, "找不到 .dsp-btn 基础规则");
+  assert.ok(/\bborder:none\b/.test(base.body),
     "默认按钮必须 border:none —— 宿主只有 .outline 变体带描边；"
-    + "给所有按钮套框是『不像一套』最大的来源。实际规则=" + m[1]);
+    + "给所有按钮套框是『不像一套』最大的来源。实际规则=" + base.body);
+});
+
+// 主按钮必须**自己**声明底色，联合几何规则里也要有一条 background:transparent 兜底。
+// 这是上面那个真 bug 的直接防线：原先底色只写在 `.dsp-btn-primary` 一条规则里，
+// 那条被注释吞掉后按钮变成"没有底色的纯文字"（用户截图里的「开启公网访问」）。
+// 现在要求两件事同时成立：① 联合几何规则带 background（丢了变体规则也只是退化成
+// 默认档，不会连字色都读不出来）；② 变体规则自己带 background（默认档不会盖住它）。
+test("设计契约：主按钮自带底色，联合规则自带兜底 background", () => {
+  const css = cssDecls(bundle);
+  const base = btnBaseRule(css);
+  assert.ok(base, "找不到 .dsp-btn 的联合几何规则");
+  assert.match(base.body, /background\s*:/,
+    "联合几何规则必须自带 background（默认档）—— 否则某条变体规则丢失时按钮完全没有底色");
+  const m = /\.dsp-btn-primary\s*\{([^}]*)\}/.exec(css);
+  assert.ok(m, "产物里找不到 .dsp-btn-primary 规则（被注释吞掉？或构建没跑）");
+  assert.match(m[1], /background\s*:/, ".dsp-btn-primary 没有自己的 background 声明");
+  // 底色与字色必须**成对**：只写底色会白压白（见主题成对性那条测试）
+  assert.match(m[1], /color\s*:\s*var\(--dsw-alias-label-primary-foreground/,
+    "主按钮字色必须取 label-primary-foreground（与 button-primary-fill 配套）");
+});
+
+// ---------------------------------------------------------------------------
+// CSS 注释**不能嵌套** —— 本轮最贵的一课，必须机器守住。
+//
+// 事故：说明性注释里写了一个注释示例，内层的注释结束符提前关掉了外层注释，
+// 后面那段中文被当成 CSS 解析，错误恢复一路吞掉下一条规则（.dsp-btn-primary）。
+// 源码里看着一切正常，浏览器里那条规则**根本不存在**：不报错、不告警，
+// 只是按钮没有底色。这类 bug 只有扫注释配对才抓得住。
+// ---------------------------------------------------------------------------
+function scanCommentPairing(css) {
+  const issues = [];
+  let line = 1; let depth = 0;
+  for (let i = 0; i < css.length; i += 1) {
+    if (css[i] === "\n") line += 1;
+    const two = css.slice(i, i + 2);
+    if (two === "/*") {
+      if (depth) issues.push({ line, kind: "nested-open" });
+      depth += 1; i += 1;
+    } else if (two === "*/") {
+      if (!depth) issues.push({ line, kind: "stray-close" });
+      else depth -= 1;
+      i += 1;
+    }
+  }
+  if (depth) issues.push({ line: -1, kind: "unclosed-open" });
+  return issues;
+}
+
+// 抽 CARD_CSS 的原文（模板字符串的正文），注释配对要按**原文**扫：
+// 嵌套注释会被"非贪婪剥注释"的写法掩盖，只有逐字符走一遍才看得见。
+function cardCssRaw(text) {
+  const start = text.indexOf("const CARD_CSS = `");
+  if (start < 0) throw new Error("找不到 CARD_CSS 定义");
+  const end = text.indexOf("\n`;", start);
+  if (end < start) throw new Error("找不到 CARD_CSS 的结束");
+  return text.slice(start + "const CARD_CSS = `".length, end);
+}
+
+test("CSS 注释不得嵌套/漏配（嵌套会静默吞掉紧随其后的整条规则）", () => {
+  const raw = cardCssRaw(source);
+  assert.deepEqual(scanCommentPairing(raw), [],
+    "CARD_CSS 里存在配对异常的注释；嵌套注释会让解析器吞掉下一条规则（实测丢过 .dsp-btn-primary）");
+  // 反证：这条检验抓不到东西就是空转
+  assert.deepEqual(scanCommentPairing("/* a /* b */ c */"), [{ line: 1, kind: "nested-open" }],
+    "反证失败：嵌套检测没真正工作");
+  assert.deepEqual(scanCommentPairing("a */ b"), [{ line: 1, kind: "stray-close" }],
+    "反证失败：多余结束符没被抓到");
+});
+
+// 模板字符串里的反引号会**提前结束** CARD_CSS —— 构建期只报一句
+// "Unexpected template string"，产物却是半截 CSS。注释里举例别用反引号。
+test("CARD_CSS 内不得出现反引号（会截断模板字符串，产物半截 CSS）", () => {
+  const start = source.indexOf("const CARD_CSS = `");
+  assert.ok(start > 0, "找不到 CARD_CSS 定义");
+  const end = source.indexOf("\n`;", start);
+  assert.ok(end > start, "找不到 CARD_CSS 的结束");
+  const body = source.slice(start + "const CARD_CSS = `".length, end);
+  const at = body.indexOf("`");
+  assert.equal(at, -1,
+    "CARD_CSS 第 " + (body.slice(0, at).split("\n").length) + " 行有反引号，模板字符串会被截断");
+});
+
+// 产物与源码的 CSS 必须同一条：构建没跑 = 界面是旧的（最难查的漂移）。
+test("设计契约：主按钮规则在产物里真实存在且带底色", () => {
+  const css = cssDecls(bundle);
+  const m = /\.dsp-btn-primary\s*\{([^}]*)\}/.exec(css);
+  assert.ok(m, "产物里找不到 .dsp-btn-primary 规则（被注释吞掉？或构建没跑）");
+  assert.match(m[1], /background\s*:/, ".dsp-btn-primary 没有 background 声明");
+  // 底色与字色必须**成对**：只写底色会白压白（见主题成对性那条测试）
+  assert.match(m[1], /color\s*:\s*var\(--dsw-alias-label-primary-foreground/,
+    "主按钮字色必须取 label-primary-foreground（与 button-primary-fill 配套）");
 });
 
 // CARD_CSS 是一段**模板字符串**，里面用 ${TYPE.caption} 这类插值引用字号刻度。

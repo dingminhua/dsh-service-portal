@@ -214,21 +214,37 @@ function page(stateKey, dark, view, click) {
        预览骗人比没有预览更糟。 */
     --dsw-alias-bg-layer-1:${dark ? "#232324" : "#fff"};
     --dsw-alias-bg-layer-2:${dark ? "#2c2c2e" : "#fff"};
+    --dsw-alias-bg-layer-3:${dark ? "#353638" : "#fff"};
+    --dsw-alias-border-l1:${dark ? "#ffffff0f" : "#0000000a"};
     --dsw-alias-border-l2:${dark ? "#ffffff1f" : "#0000001a"};
     --dsw-alias-border-l3:${dark ? "#ffffff29" : "#0000001f"};
+    --dsw-alias-border-l4:${dark ? "#ffffff33" : "#00000029"};
     --dsw-alias-brand-primary:${dark ? "#f9fafb" : "#0f1115"};
     --dsw-alias-button-primary-fill:${dark ? "#f9fafb" : "#0f1115"};
     --dsw-alias-button-primary-hover:${dark ? "#ebeef2" : "#43454a"};
     --dsw-alias-label-primary:${dark ? "#f9fafb" : "#0f1115"};
     --dsw-alias-label-secondary:${dark ? "#cfd3d6" : "#61666b"};
+    --dsw-alias-label-tertiary:${dark ? "#adb2b8" : "#81858c"};
+    --dsw-alias-label-dimmed:${dark ? "#43454a" : "#e1e5ee"};
     --dsw-alias-label-primary-foreground:${dark ? "#0f1115" : "#fff"};
     --dsw-alias-state-error-primary:${dark ? "#f25a5a" : "#ec1313"};
     --dsw-alias-state-idle-primary:${dark ? "#545557" : "#d4d4d4"};
     --dsw-alias-state-success-primary:${dark ? "#22c55e" : "#22c55e"};
     --dsw-alias-state-warn-primary:${dark ? "#f59e0b" : "#f59e0b"};
+    --dsw-alias-state-business-primary:${dark ? "#7aaaff" : "#4176e6"};
     --dsw-alias-switch-thumb:${dark ? "#adb2b8" : "#fff"};
     --dsw-alias-interactive-bg-hover:${dark ? "#ffffff14" : "#2631480f"};
     --dsw-alias-interactive-bg-hover-solid:${dark ? "#353638" : "#f1f3f5"};
+    --dsw-alias-interactive-bg-active:${dark ? "#ffffff24" : "#2631481a"};
+    --dsw-alias-toast-bg:${dark ? "#43454a" : "#353638"};
+    --dsw-alias-toast-label:#fff;
+    --dsw-alias-bg-mask-1:${dark ? "#00000080" : "#0000003d"};
+    --dsw-mask-blur:blur(2px);
+    --dsw-elevation-prominent:0 1px 2px rgba(0,0,0,.04),0 3px 8px rgba(0,0,0,.04),0 0 20px rgba(0,0,0,.05);
+    --dsw-shadow-lv3:0 0 1px 0 #0003,0 0 4px 0 #00000005,0 12px 32px 0 #00000014;
+    --dsw-radius-xs:4px; --dsw-radius-sm:8px; --dsw-radius-md:12px;
+    --dsw-radius-lg:16px; --dsw-radius-xl:20px; --dsw-radius-panel:28px;
+    --ds-ease-in-out:cubic-bezier(.4,0,.2,1); --ds-transition-duration-fast:.1s;
     --dsw-alias-bg-base:${dark ? "#151517" : "#fff"} };
 </style></head><body><div id="root"></div>
 <script>
