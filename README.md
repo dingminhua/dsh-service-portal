@@ -78,14 +78,16 @@
 
 ## 界面
 
-两张图都是**真页面渲染出来的截图**（无头 Chrome 实拍，不是设计稿），且**全部用演示数据**：
+两张图都是**真页面渲染出来的截图**（无头 Chrome 实拍，不是设计稿），且**全部用演示数据**
+（设置页那张由 `tools/render_panel_preview.mjs` 的 `?s=svcboth` 渲染）：
 `192.168.71.10` 是占位内网地址、`warm-dawn-1234.trycloudflare.com` 是占位域名、
 口令是示例串。README 里不放任何真实地址或口令。
 
 <p align="center">
   <img src="docs/assets/panel-both.png" width="760" alt="设置页：局域网与公网两条入口，各带二维码、地址与口令">
   <br>
-  <sub><b>设置页</b>：内网 / 公网两条入口并排，各自判断开关；扫码即开，节点增删在此</sub>
+  <sub><b>设置页</b>（设置 → 左侧导航「对外服务门户」）：内网 / 公网两条入口并排，
+  各自判断开关；扫码即开，节点增删在此</sub>
 </p>
 
 门户页是**扫码打开的那个页面**——只读的测试页与入口页：点「访问」直接打开节点，
@@ -562,7 +564,8 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
 `dsh-service-portal` 是 LaoDing 插件家族的一员（家族品牌图标与 `dsh-connect-workbuddy` /
 `dsh-connect-trae` 等一致）。家族成员共享：
 
-- 设置卡片外观与 `row.*` 文案约定；
+- 设置页外观、品牌图标与 `row.*` 文案约定（1.1.0 起配置页是宿主设置导航里的一整页，
+  与家族兄弟 `dsh-subagent-default-model` 2.2.0 同一形态）；
 - 手写 CommonJS 客户端分发格式（`window.__ModuleLoader__.load`），零构建依赖；
 - 「启动器，不是第二份实现」的复用纪律：隧道/认证等已完成并验收的实现不在插件里重写。
 

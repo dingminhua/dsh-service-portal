@@ -47,6 +47,14 @@ portal itself has nothing to do with poker — **any local service** can use the
 
 ## Screenshots
 
+The settings page — **Settings → "对外服务门户" in the left nav rail** (LAN / public entrances
+side by side, each with its own switch, QR code, address and password). Rendered from the real
+component via `tools/render_panel_preview.mjs` (`?s=svcboth`), with demo data only.
+
+<p align="center">
+  <img src="docs/assets/panel-both.png" width="760" alt="settings page: LAN and public entrances, each with a QR code, address and password">
+</p>
+
 The portal page (what you get after scanning the QR code — read-only: test + guide).
 Captured from a real portal process with headless Chrome via `tools/shoot_portal.py`,
 not design mockups.

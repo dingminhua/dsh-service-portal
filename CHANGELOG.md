@@ -32,6 +32,20 @@
   这个开关由 `ServicePortalSection` **显式传 prop**，不靠 `props.view` 猜 ——
   设置页的 props 里根本没有 `view`，猜错的两种表现都不会报错。
 
+### Reverted
+
+**撤销 1.0.12 的「100 字详情文档」，插件详情页恢复渲染完整 README。**
+
+`docs/DETAIL.zh.md`、`docs/DETAIL.md`、两个 `locale/*.json` 里的 `meta.detail`，
+以及 `package.json#files` 里的两条路径全部移除；`files` 回到 9 项。
+
+理由（与兄弟插件 dsh-subagent-default-model 2.1.19 同一条）：`meta.detail` 依赖
+「路径正确 + 语言链命中」这类**隐式约定**，失败时静默回落到包根 README、界面上
+看不出任何问题；而它唯一的作用只是缩短显示文本。README 的内容本身是有用的，只是长。
+
+`locale/*.json` 本身**保留** —— 宿主读 `meta.title` / `meta.description` 来显示
+插件名与简介，「插件叫什么」只有这一个开关，删了英文界面下会显示包名。
+
 ### Compatibility
 
 - `engines.dsh` 从 `>=0.2.1-rc.1 <0.3.0-0` 抬到 **`>=0.2.1-rc.5 <0.3.0-0`**：
@@ -43,6 +57,10 @@
 
 - README 中英文的配置位置说明同步（设置页 / `settings.section`）；
   兼容性复核表里的槽位一行换成 `settings.section` / `settings.section.icon`。
+- **界面截图重拍**：`docs/assets/panel-both.png` 还是旧形态（卡片里套卡片、
+  960 宽度上限），换成设置导航整页的实际渲染（`?s=svcboth`，仍是演示数据）。
+  英文 README 补上同一张图 —— 之前只有门户页截图，设置页在哪找不到。
+- 「与同族插件的关系」里的「设置卡片外观」改成「设置页外观 + 品牌图标」。
 
 ### Tests
 
