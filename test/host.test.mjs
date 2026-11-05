@@ -1444,24 +1444,46 @@ test("退出收尾：pid 匹配且端口在听 → 真的把门户停掉", async
   }
 });
 
-test("随 DSH 开关：apply() 把收尾挂到 dispose 与信号上（不是只定义没接）", () => {
-  // registerPortalTeardown 定义了收尾，但**定义了不等于接上了**。
-  // 这条检验盯的是接线本身：apply() 必须真的注册 ctx.on("dispose")，
-  // 并在进程信号上兜底（DSH 被 Ctrl+C 时 cordis 不一定来得及跑 dispose）。
+test("随 DSH 开关：apply 的清理器真的会收门户（不再依赖不存在的 dispose 事件）", async () => {
+  // 拦的 bug（1.0.11）：apply 里原来写的是 `ctx.on?.("dispose", ...)`，而 cordis 4.x
+  // **没有 "dispose" 事件**（只发 internal/plugin、internal/status、internal/commit、
+  // internal/dispatch）。那条监听器永不触发 → 卸载时门户不会被收；更糟的是 apply
+  // 返回的清理器还会摘掉 process.on("exit")，把「DSH 退出收尸」这层也一并废掉。
+  // 所以这里既查源码**不许回退**，也查**行为**：调用清理器必须真的走到收尾。
   const src = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
-  assert.ok(src.includes('ctx.on?.("dispose"'),
-    "apply 必须把收尾挂到 ctx.on(\"dispose\")，否则卸载时门户不会被收掉");
+  assert.ok(!src.includes('ctx.on?.("dispose"'),
+    "cordis 4.x 没有 \"dispose\" 事件：这个监听器永不触发，必须改用 apply 的返回值");
   assert.ok(src.includes("registerPortalTeardown"),
     "apply 必须使用 registerPortalTeardown（收尾逻辑只有一份）");
   for (const sig of ["SIGINT", "SIGTERM"]) {
     assert.ok(src.includes(`"${sig}"`), `缺少 ${sig} 兜底：DSH 被中断时门户会变残留进程`);
   }
-  // 收尾必须幂等：dispose 与信号可能都触发，不能收两遍/抛错
+  // 收尾必须幂等：清理器与信号可能都触发，不能收两遍/抛错
   assert.ok(/let closed = false/.test(src) && /if \(closed\) return/.test(src),
     "收尾必须幂等（closed 标志），否则重复退出会互相打架");
   // 收尾要只针对"自己起的"门户，不能误杀用户手动起的调试进程
   assert.ok(src.includes("Number(status.portalPid) !== Number(ownedPid)"),
     "必须按 pid 判归属，否则会误杀用户手动起的门户");
+
+  // 行为检验：ctx.inject 的回调返回的就是 fiber 清理器；调用它必须触发 close
+  // （close 的第一句是 logger.info「[service-portal] 退出收尾（插件卸载）…」）。
+  const logs = [];
+  let cleanup;
+  const ctx = {
+    logger: { info: (...args) => logs.push(args.join(" ")), warn: () => {} },
+    inject: (_deps, fn) => {
+      cleanup = fn({ webServer: { register: () => () => {} } });
+    },
+  };
+  apply(ctx, {
+    infraPath: "D:\\nonexistent", repoPath: "D:\\nonexistent",
+    pythonPath: "", webEnabled: true, autoStart: false,
+  });
+  assert.equal(typeof cleanup, "function", "apply 的注入回调必须返回清理器");
+  cleanup();
+  await new Promise((done) => setTimeout(done, 10));
+  assert.ok(logs.some((line) => line.includes("插件卸载")),
+    "卸载清理器必须调用门户收尾，否则禁用插件后门户会变成无人管的孤儿");
 });
 
 // ---------------------------------------------------------------------------

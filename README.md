@@ -601,6 +601,11 @@ python -X utf8 tools\check_tunnel_auth.py    # 35 项：路由/前缀剥离/多�
 
 ## 已知限制
 
+- **本机 API 不经过宿主鉴权**：`/service-portal/api` 只监听回环地址，但宿主的连接鉴权
+  （`connection.admit`）只盖 `/api`，插件的路由是裸 handler —— 所以**同机的任意本地进程**
+  可以直接 `GET /status` 读到明文门户口令。这是既有的本地信任边界（不是 0.2.2 引入的）；
+  需要更强隔离时，把 DSH 跑在独立账户/沙箱里，或等后续版本把 `requestRejection`
+  接进 handler 后再收紧。
 - **随机域名，不固定**：每次启动都是一次性的 `*.trycloudflare.com`，关闭或重启后失效，
   且可能被他人复用为陌生网站。需要**固定自有域名**得用 named tunnel + ingress，本插件不支持。
   界面因此反复提醒「请勿收藏，每次从本页扫当前二维码」。

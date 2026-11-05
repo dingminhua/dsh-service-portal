@@ -277,6 +277,12 @@ Marketplace cards and README badges are two separate mechanisms:
 
 ## Known limitations
 
+- **The plugin API is not behind the host's connection auth**: `/service-portal/api` binds to
+  loopback only, but the host's `connection.admit` gate covers `/api` only; plugin routes are raw
+  handlers, so any local process on the same machine can `GET /status` and read the plaintext
+  portal password. This is the existing local trust boundary (not introduced by 0.2.2); for
+  stronger isolation run DSH under a separate account/sandbox, or wait for the handler to enforce
+  `requestRejection` in a later release.
 - **Random domain, never fixed**: every start gets a one-off `*.trycloudflare.com`; it dies on
   close or restart and may be recycled by someone else as an unrelated site. A **fixed custom
   domain** needs a named tunnel + ingress, which this plugin does not support. The UI therefore

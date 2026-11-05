@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.0.11 (2026-11-05)
+
+**修两个「看起来接上了、其实没接」的问题：卸载时收门户是死代码，客户端硬依赖了一个自己
+从不使用的服务。**
+
+两处都不是 0.2.2-rc.1 引入的回归 —— 是一直在的静默失效，只在「禁用插件 / 热重载」和
+「组合里没有 `connection`」时才会现形。宿主升级复核之后又追了一轮，才把它们挖出来。
+
+### Fixes
+
+- **卸载收尾从来没执行过**（`lib/index.js`）：原来写的是 `ctx.on?.("dispose", ...)`，
+  但 cordis 4.x **没有** `"dispose"` 事件（只发 `internal/plugin`、`internal/status`、
+  `internal/commit`、`internal/dispatch`）—— 监听器永不触发，卸载时门户不会被停；
+  更糟的是 `apply` 返回的清理器还会摘掉 `process.on("exit")`，把「DSH 退出收尸」
+  那层也一并废掉。现在收尾移进 `apply` 的清理器（cordis 的 fiber 语义），信号兜底保留，
+  仍按 pid 判归属、仍幂等。
+  - 判据不是读文档：用宿主自带 Electron 载入 `app.asar` 里的 cordis 4.1.0，
+    实测 `ctx.on("dispose")` 触发 **false**、`apply` 返回的清理器触发 **true**。
+- **客户端只注入真正在用的服务**（`client/index.jsx`）：`inject` 原来列了
+  `["slots", "connection"]`，但实现里从未读过 `ctx.connection`（状态全走同源
+  `/service-portal/api`）。cordis 的 `inject` 是硬门禁：任何不带 `connection` 的组合
+  都会让整张设置卡片**静默消失**。现在只保留 `slots`。
+
+### Tests
+
+- 「随 DSH 开关」那条从**只 grep 源码**改成**行为断言**：给一个假 ctx，取 `apply`
+  交给 `inject` 的清理器并调用它，断言真的走到「退出收尾（插件卸载）」；
+  同时加反向断言，禁止 `ctx.on?.("dispose")` 回退。
+- `npm run test:host`：160/160（0 skip）。
+
+### Docs
+
+- README / README.en.md「已知限制」补一条：`/service-portal/api` 只监听回环地址，
+  但**不经过宿主的连接鉴权**（宿主的 `/api` 才走 `connection.admit`），因此同机的
+  任意本地进程可以直接读到 status（含明文口令）。这是既有的本地信任边界；
+  加固方案（handler 前置 `requestRejection`）待单独实测后再发。
+
 ## 1.0.10 (2026-11-05)
 
 **跟随宿主升级：DSH 0.2.1-rc.5 → 0.2.2-rc.1。插件代码零改动；把「升级后怎么自查」
