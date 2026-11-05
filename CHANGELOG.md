@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.0.12 (2026-11-06)
+
+**给宿主 0.2.2+ 的插件详情页一段短简介，不再把 700 多行的 README 整篇塞进详情页。**
+
+DSH 0.2.2 起，插件页会按界面语言依次读 `locale/<语言>.json` 的 `meta.detail`；找到就渲染它
+指向的 Markdown，一个都没找到才回落包根 README。本插件此前没有 `detail`，于是中英文界面
+都把完整的 `README.md` 渲染进那个 560px 的可滚动框里（带反引号、issue 编号、内部实现细节）。
+这次按 `dsh-connect-workbuddy` 的 `docs/PLUGIN-DETAIL-GUIDE.md` 落地，**这是包内容变更，
+必须发新版本才对真实用户生效**（宿主没有开关能关掉整个区块，删 README 会连带弄空 npm /
+GitHub / 市场页面）。
+
+### Features
+
+- **每个语言的 `meta` 都加 `detail`**：`locale/zh.json` → `docs/DETAIL.zh.md`（85 字符），
+  `locale/en.json` → `docs/DETAIL.md`（97 字符）。`en.json` 必写——它是语言链的最终兜底，
+  只写中文的话英文界面照样回落 README 全文。
+- 两份短文档随包分发：`package.json` 的 `files` 白名单补上 `docs/DETAIL.zh.md` 与
+  `docs/DETAIL.md` 两条明确路径（详情页从包目录直接读文件，不走 `exports`，无需改导出）。
+  文案只讲用户能用的能力，不含内部路径、issue 编号或实现细节；按字符总数（汉字、标点、
+  字母、空格全算）计，均 ≤100 且在 80–95 的推荐余量附近。
+
+### Docs
+
+- 新增 `docs/DETAIL.zh.md` / `docs/DETAIL.md` 两份 ≤100 字符的详情页简介。
+- 详情页的回落行为、五个坑（双语都要写、路径包根相对且 `.md` 结尾、文件必须真的进包、
+  没有开关可关、改包内容要发版）与核对清单见上游指南
+  [`dsh-connect-workbuddy/docs/PLUGIN-DETAIL-GUIDE.md`](https://github.com/dingminhua/dsh-connect-workbuddy/blob/main/docs/PLUGIN-DETAIL-GUIDE.md)。
+
+### Tests
+
+- `npm run test:host`：160/160（0 skip）；`npm run check`：150/160 通过、10 项宿主门禁在
+  普通 node 下明确跳过（由 `test:host` 用宿主运行时补齐）。
+- `python3 -X utf8 tools/check_tunnel_auth.py` / `check_tunnel_domain.py` / `check_plugin.py`：
+  全部 PASS（35 + 10 + 4 套件）。
+- 用宿主自己的 `@deepseek-ai/dsh-plugin-detail` 的 `readPackageDocument()` 对 `zh` / `en`
+  两条语言链实测：都返回 `origin: "locale"`，分别解析到两份短文档，不再回落 README。
+- `npm pack --dry-run` 可见 `docs/DETAIL.md`（98 B）与 `docs/DETAIL.zh.md`（224 B）进包；
+  `tools/portal_run.py` / `tools/start_public_gui.py` 仍在包内（35 个 `.py`），
+  `__pycache__` / 作者本机路径扫描干净。
+
 ## 1.0.11 (2026-11-05)
 
 **修两个「看起来接上了、其实没接」的问题：卸载时收门户是死代码，客户端硬依赖了一个自己
