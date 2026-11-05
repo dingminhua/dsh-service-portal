@@ -311,37 +311,45 @@ def main():
           client.count('"对外服务门户"') >= 2,
           "出现次数=%d" % client.count('"对外服务门户"'))
 
-    # ================= ①b 注册位置：插件页，不是宿主设置导航 =================
+    # ================= ①b 注册位置：宿主「设置」导航里的一整页 =================
     #
-    # 用户要求：「插件设置要放到插件设置里，而不是出现在宿主的设置里，
-    # 你看看 workbuddy 是怎么做的」。
+    # 用户要求：「设置的内容转移到设置里」。
     #
-    # 实测（cordis_inspect Slots）：
-    #   · `settings.section` 的 occupants 里原先有 `service-portal`，
-    #     也就是说它出现在**宿主设置左侧导航**（和通用/模型/插件并列）；
-    #   · workbuddy / dsh-subagent-default-model **完全不用** settings.section，
-    #     只注册 `plugins.bundle.config` 与 `plugins.row.config`。
-    print("\n[①b 注册在插件页的插件配置里，不在宿主设置导航]")
-    check("**不再**注册 settings.section",
-          'inject("settings.section"' not in client
-          and 'name: "settings.section"' not in client)
-    check("注册到 plugins.bundle.config（插件自己的配置区）",
-          'plugins.bundle.config' in client)
-    check("注册到 plugins.row.config（行入口的配置页）",
-          'plugins.row.config' in client)
-    check("键按 `<包名>#<行 id>` 拼（行入口的 keyDomain 就要求这个形状）",
-          "`${key}#${key}`" in client or "#${key}" in client)
-    check("两种包名拼写都注册（裸名 + include: 前缀）",
-          "CARD_KEYS" in client and "include:${PKG}" in client,
-          "（只注册裸名会让 include: 挂载下**整页空白且不报错**）")
-    check("一次注册失败不影响另一个（每个槽位独立 try/catch）",
-          "槽位" in client and "注册失败" in client)
+    # 历史：0.8.3 曾从 `settings.section` 改到插件页的两个 keyed 槽位
+    # （`plugins.bundle.config` / `plugins.row.config`），理由是"插件设置要放在
+    # 插件页里"。1.1.0 又搬回设置导航，因为配置项已从两三个开关长成「节点管理 +
+    # 两条入口栏 + 二维码」，插件详情页那一角装不下、入口也太深。
+    # 与兄弟插件 dsh-subagent-default-model 2.2.0 走的是同一条路。
+    #
+    # 实测（cordis_inspect Slots，宿主 0.2.2-rc.1）：
+    #   `settings.section` 是 list / root，注册项 id/order/label，
+    #   occupants 里已有 account -10 / general 0 / models 10 / plugins 15 /
+    #   agent-presets 20 / opencode-go 20 / dsh-subagent-default-model 30 /
+    #   market 40；`settings.section.icon` 用同一个 id 寻址，id 对不上就静默
+    #   回落成默认齿轮。
+    print("\n[①b 注册在宿主设置导航里的一整页（不再占插件页配置区）]")
+    check("**已**注册 settings.section（页面本体）",
+          'inject("settings.section"' in client
+          and 'name: "settings.section"' in client)
+    check("**已**注册 settings.section.icon（导航图标，不是默认齿轮）",
+          '"settings.section.icon"' in client)
+    check("页面与图标用同一个 id（宿主按 `only: row.id` 派发，对不上就静默回落）",
+          "SECTION_ID" in client and client.count("SECTION_ID") >= 3)
+    check("不再注册 plugins.bundle.config（同一份配置不能有两个编辑入口）",
+          "plugins.bundle.config" not in client)
+    check("不再注册 plugins.row.config",
+          "plugins.row.config" not in client)
+    check("**没有**能力探测（slots.inject 本身就是探测；探测错 = 静默关闭功能）",
+          "specOf" not in client and "typeof ctx.slots." not in client,
+          "（兄弟插件 2.1.16/2.1.17 就栽在这个恒为 false 的探测上）")
+    check("一次注册失败不影响另一次（页 / 图标各自 try/catch）",
+          "注册失败" in client and client.count("console.error") >= 2)
     check("**不把 settingsScope 列进 inject**（0.1.7+ 已移除，"
           "硬依赖会导致 apply 永不执行）",
           '"settingsScope"' not in client.split("const inject")[1].split(";")[0]
           if "const inject" in client else True)
-    check("处理 view='summary'（插件页折叠态要有一行摘要，不能是空壳）",
-          '"summary"' in client and "view ===" in client)
+    check("设置页里不套卡片（chrome=false 走 .dsp-section，卡里套卡）",
+          '.dsp-section{' in client and "chrome === false" in client)
 
     # ================= ② 局域网口令独立 =================
     print("\n[② 局域网口令：随机 + 自定义，与公网分开]")

@@ -1,5 +1,75 @@
 # Changelog
 
+## 1.1.0 (2026-11-06)
+
+**次版本号升级**：配置入口从「插件详情页里的配置区」整体搬到**宿主设置面板左侧
+导航的独立页面**，是一次用户可见的入口变更，因此走 `1.1.0` 而不是补丁号。
+
+### Changed
+
+**配置页现在是 `settings.section` 里的一整页，不再占插件页的配置槽位。**
+
+注册位置换成宿主 0.2.1-rc.5 起提供的 `settings.section`（LIST / root / `id` 必填），
+左侧导航里与「账号与余额 / 通用 / 模型 / 插件 / 智能体预设」平级；原来的
+`plugins.bundle.config` 与 `plugins.row.config` 两处注册**全部移除** —— 同一份配置
+不应有两个编辑入口。与本地兄弟 dsh-subagent-default-model 2.2.0 是同一条路。
+
+- `settings.section` 注册项：`id` = 包名 `dsh-service-portal`、`order` = 35
+  （内置 account -10 / general 0 / models 10 / plugins 15 / agent-presets 20，
+  第三方 opencode-go 20、dsh-subagent-default-model 30、market 40，35 落在中间不撞值）。
+- `settings.section.icon` 用**同一个 id** 注册导航图标（本插件的 LD 品牌标记，
+  不是通用齿轮）。宿主按 `renderSlot(…, { only: row.id })` 派发，id 对不上会
+  **静默回落成默认齿轮**，页面上看不出任何错误。
+- 页与图标在**同一个 `settings.section` 的 `inject` 回调里注册**，disposer 成对返回。
+  两次独立的 `inject()` 看起来等价，其实不是：各自等待自己的声明，而图标的 cell
+  只在"页的 id 存在"时才有意义（兄弟插件 2.1.17 就栽在这里）。
+- **不做能力探测**。`slots.inject()` 本身就是探测：槽位没声明就什么都不做、不抛错。
+  外面再套一层"先问 slots 上有没有某个访问器"才是真坑 —— 兄弟插件 2.1.18 探测了
+  一个只在渲染器内部存在的访问器，判恒为 false，整段注册被静默跳过。
+- 设置页里**不再套卡片**：内容组件收 `chrome: false`，走新的 `.dsp-section`
+  容器（不描边、不圆角、不写死 `max-width:960`）。宿主已经给了页面内容列与留白，
+  再套一层卡就是卡里套卡，960 的上限还会让本页与内置页面的对齐线错开一截。
+  这个开关由 `ServicePortalSection` **显式传 prop**，不靠 `props.view` 猜 ——
+  设置页的 props 里根本没有 `view`，猜错的两种表现都不会报错。
+
+### Compatibility
+
+- `engines.dsh` 从 `>=0.2.1-rc.1 <0.3.0-0` 抬到 **`>=0.2.1-rc.5 <0.3.0-0`**：
+  `settings.section` 是 rc.5 才有的槽位，旧宿主上注册只会静静地不生效。
+  这是**下限收紧**，装到 rc.1–rc.4 上会被版本门禁挡住并给出明确原因，
+  而不是"插件页里找不到配置"。
+
+### Docs
+
+- README 中英文的配置位置说明同步（设置页 / `settings.section`）；
+  兼容性复核表里的槽位一行换成 `settings.section` / `settings.section.icon`。
+
+### Tests
+
+`npm run check`：60 项（client 46 + manifest 14），**56 通过 / 0 失败 / 4 跳过**
+（跳过的 4 项是 manifest 里需要宿主运行时的版本门禁）；`npm run test:host`
+用宿主自带运行时补齐后 **160/160，0 跳过**（含 host-contract 9 项）。
+
+`python3 tools/check_portal_parity.py`：**157/172**。其中 15 项失败是**本轮之前就存在**
+的主题令牌断言（基线同为 156/171、15 项失败），与本次改动无关；本轮新增的 9 项
+注册位置检验全部通过。
+
+新增/改写的守卫：
+
+- **源码正则**：产物里有 `settings.section` 与 `settings.section.icon`，且
+  `plugins.bundle.config` / `plugins.row.config` **一个都不剩**（同一个配置只能有一个入口）。
+- **行为断言**：真调 `apply(ctx)`，断言注册到的两个 name、`id` 必须与包名一致、
+  图标的 `id` 必须等于页面的 `id`（对不上就是默认齿轮，且不报错）。
+- **配对断言**：注册顺序必须是 inject(页) → register(页) → inject(图标) → register(图标)，
+  证明图标在页的回调里成对注册，而不是两次并列的最外层 `inject`。
+- **清理断言**：外层回调返回的清理器必须把**页与图标都**撤销（少撤一个的表现是
+  禁用插件后导航里留一个点不动的空页，或图标消失而页面还在）。
+- **渲染断言**：页面外壳必须给内容组件传 `chrome: false`（设置页里多一张卡）。
+
+夹具也修了一处：`slots.inject()` 在真实 cordis 里返回的是「撤销这次注入」的清理器，
+与回调返回的处置器是**两个不同**的函数；夹具原先直接返回 `cb()` 的返回值，会让同一个
+函数被 `disposers` 收两次、撤销时记两笔，看不出真实行为。
+
 ## 1.0.12 (2026-11-06)
 
 **给宿主 0.2.2+ 的插件详情页一段短简介，不再把 700 多行的 README 整篇塞进详情页。**

@@ -71,9 +71,14 @@ function readHostSlotCatalog(entryUrl) {
 
 // ---------------------------------------------------------------------------
 // 一、宿主仍声明本插件注册的那两个槽位，且形状没变
+//
+// 1.1.0 起配置页搬到宿主设置的左侧导航：注册项是 `settings.section`（页面）
+// 与 `settings.section.icon`（导航图标，按同一个 id 寻址）。两者都是 **list**
+// 槽位、注册 id 必填 —— 与旧的 keyed 配置槽位形状完全不同，所以这里的断言
+// 跟着换掉，不是"放宽"。
 // ---------------------------------------------------------------------------
 
-test("宿主槽位目录：插件页的两个配置槽位仍是 keyed / root / key 必填", { skip: skipReason }, () => {
+test("宿主槽位目录：设置导航的两个槽位仍是 list / root / id 必填", { skip: skipReason }, () => {
   const { entries, raw } = readHostSlotCatalog(loaded.entryUrl);
 
   // 先证明解析器**真的读到了目录**：条目太少说明产物形状变了，
@@ -82,45 +87,41 @@ test("宿主槽位目录：插件页的两个配置槽位仍是 keyed / root / k
     `只解析出 ${entries.size} 个槽位 —— 宿主产物形状可能变了（正则失配），`
     + "这条检验已失效，必须先修解析再谈结果");
 
-  for (const slot of ["plugins.bundle.config", "plugins.row.config"]) {
+  for (const slot of ["settings.section", "settings.section.icon"]) {
     const entry = entries.get(slot);
     assert.ok(entry !== undefined,
-      `宿主不再声明槽位 "${slot}" —— 本插件注册到它的卡片会**静默消失**`
-      + "（插件页空白，无报错）。宿主已改名的槽位清单："
-      + JSON.stringify([...entries.keys()].filter((k) => k.startsWith("plugins."))));
+      `宿主不再声明槽位 "${slot}" —— 本插件的设置页会**静默消失**`
+      + "（左侧导航里没有这一行，控制台不报错）。宿主当前的设置相关槽位："
+      + JSON.stringify([...entries.keys()].filter((k) => k.startsWith("settings."))));
 
-    assert.equal(entry.kind, "keyed",
-      `槽位 "${slot}" 的 kind 从 keyed 变了；本插件按 key 注册，形状不符即注册失败`);
+    assert.equal(entry.kind, "list",
+      `槽位 "${slot}" 的 kind 从 list 变了；本插件按 list 语义注册，形状不符即注册失败`);
     assert.equal(entry.scope, "root",
       `槽位 "${slot}" 的 scope 从 root 变了；插件的注册选项按 root 写`);
 
-    // `key` 仍是必填注册项 —— 插件给的就是 key（bundle 名 / 包名#行 id）。
+    // `id` 仍是必填注册项 —— 插件给的就是 id（本插件用包名）。
     // 若宿主把它改成可选或改名，插件的注册对象会被判无效。
-    assert.match(entry.body, /name:\s*"key",\s*requirement:\s*"required"/u,
-      `槽位 "${slot}" 不再要求必填的 "key" 注册项；本插件的注册参数需要跟着改`);
+    assert.match(entry.body, /name:\s*"id",\s*requirement:\s*"required"/u,
+      `槽位 "${slot}" 不再要求必填的 "id" 注册项；本插件的注册参数需要跟着改`);
   }
 
   // 反例：拼错/不存在的槽位必须**不在**目录里。否则上面两句等于空对空
   // （例如正则宽松到匹配任意字符串）。
-  assert.equal(entries.get("plugins.row.config.nonexistent"), undefined,
+  assert.equal(entries.get("settings.section.nonexistent"), undefined,
     "反例失败：不存在的槽位也出现在目录里，说明解析器把任意字符串都当条目了");
-  assert.ok(!raw.includes("plugins.row.config.nonexistent"),
+  assert.ok(!raw.includes("settings.section.nonexistent"),
     "反例失败：宿主产物里根本不存在这个假槽位名，解析器却给出了条目");
 });
 
-test("宿主槽位目录：行配置的键仍是 `<包名>#<行 id>`（插件按 name#name 注册）", { skip: skipReason }, () => {
+test("宿主槽位目录：图标的注册 id 必须等于页面的 id（宿主按 only: row.id 派发）", { skip: skipReason }, () => {
   const { entries } = readHostSlotCatalog(loaded.entryUrl);
-  const entry = entries.get("plugins.row.config");
-  assert.ok(entry !== undefined, "宿主不再声明 plugins.row.config");
+  const icon = entries.get("settings.section.icon");
+  assert.ok(icon !== undefined, "宿主不再声明 settings.section.icon");
 
-  // 插件注册的键是 `${key}#${key}`（包名 # 行 id；本 bundle 的行 id 就是包名）。
-  // 宿主文档里的键格式一旦从 `#` 改掉，那些注册**不会报错**，只会永远不被派发。
-  assert.match(entry.body, /`<package name>#<row id>`/u,
-    "宿主对 plugins.row.config 键格式的描述变了；插件注册的 `${包名}#${行id}` 需要重新核对");
-
-  // 反例：把 `#` 换成 `.` 之后描述必须不再匹配 —— 证明上一条不是"含 # 就过"。
-  assert.doesNotMatch(entry.body.replaceAll("#", "."), /`<package name>#<row id>`/u,
-    "反例失败：替换分隔符后仍匹配，说明这条断言没有真正锁住格式");
+  // 宿主文档原话：注册 id 必须等于目标 section 的 id，不匹配的 id 永不渲染，
+  // 且回落成默认齿轮 —— **页面上看不出任何错误**。
+  assert.match(icon.body, /must equal the target section's id|must equal/u,
+    "宿主对 settings.section.icon 的 id 匹配规则描述变了；本插件按包名做 id，需要重新核对");
 });
 
 // ---------------------------------------------------------------------------

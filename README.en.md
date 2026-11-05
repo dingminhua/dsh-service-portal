@@ -106,7 +106,11 @@ So after installing, enable the bundle — either way:
 > rewrites the profile manifest. The symptom is "it worked before the upgrade, now the
 > plugin page is empty and the API 404s". See "Known limitations" for the diagnosis.
 
-## Configuration (DSH settings page)
+## Configuration (DSH **Settings → Service Portal**)
+
+The configuration page is a first-class entry in the settings nav rail (registered on
+the host's `settings.section` slot, next to General / Models / Plugins) — not a card
+buried in the plugin detail page. Its nav icon is this plugin's own brand mark.
 
 | Field | Default | Description |
 | :--- | :--- | :--- |

@@ -403,18 +403,25 @@ test("元素工厂必须由模块级 React.createElement 定义", () => {
     "源码缺少模块级 h 定义");
 });
 
-test("设置组件注册进插件页的插槽（不是死代码，也不注册进宿主设置导航）", () => {
-  // 用户要求：「插件设置要放到插件设置里，而不是出现在宿主的设置里」。
-  // 参照 workbuddy：注册 plugins.bundle.config / plugins.row.config。
-  assert.match(bundle, /"plugins\.bundle\.config"/,
-    "缺少 plugins.bundle.config 注册");
-  assert.match(bundle, /"plugins\.row\.config"/,
-    "缺少 plugins.row.config 注册");
-  assert.match(bundle, /ServicePortalSettingsTab/,
-    "组件没有被注册（成了死代码）");
-  // 反向断言：不能再注册进宿主设置的左侧导航
-  assert.ok(!/inject\("settings\.section"/.test(bundle),
-    "不应再注册 settings.section（那是宿主设置导航的一整页）");
+test("设置组件注册进宿主「设置」导航的独立页面（不再注册插件页配置区）", () => {
+  // 用户要求：「设置的内容转移到设置里」—— 与兄弟插件 dsh-subagent-default-model
+  // 2.2.0 同一条路：配置入口从插件页的配置区搬到设置面板左侧导航的一整页。
+  //
+  // 这条只证明"字符串在文件里"，真正的行为断言在下面 runApply() 那组。
+  // 两条都要有：正则负责"产物里到底有没有这一段"，行为断言负责"注册真的发生了、
+  // id 对得上"。（0.8.3 就是只靠正则一路绿灯、位置却错。）
+  assert.match(bundle, /"settings\.section"/,
+    "缺少 settings.section 注册");
+  assert.match(bundle, /"settings\.section\.icon"/,
+    "缺少 settings.section.icon 注册（导航里会回落成默认齿轮）");
+  assert.match(bundle, /ServicePortalSection/,
+    "页面组件没有被注册（成了死代码）");
+  // 反向断言：插件页的两个 keyed 槽位要**彻底**撤掉 —— 同一份配置只能有一个
+  // 编辑入口，两处并存会让用户改完一处、另一处仍显示旧值。
+  assert.ok(!/"plugins\.bundle\.config"/.test(bundle),
+    "仍在注册 plugins.bundle.config（用户要求整体移到设置里）");
+  assert.ok(!/"plugins\.row\.config"/.test(bundle),
+    "仍在注册 plugins.row.config（用户要求整体移到设置里）");
 });
 
 // ---------------------------------------------------------------------------
@@ -466,7 +473,7 @@ function runApply() {
   return { entry, exports: entry.factory(requireShim) };
 }
 
-test("apply() 实际注册到插件页槽位（行为断言，不是源码正则）", () => {
+test("apply() 实际注册到设置导航的页面槽位（行为断言，不是源码正则）", () => {
   const { exports: mod } = runApply();
   assert.equal(typeof mod.apply, "function", "产物没有可调用的 apply");
   assert.equal(mod.name, pkg.name, "导出 name 与包名不一致");
@@ -488,40 +495,82 @@ test("apply() 实际注册到插件页槽位（行为断言，不是源码正则
 
   const regs = calls.filter((c) => c.kind === "register");
   const names = new Set(regs.map((r) => r.name));
-  assert.ok(names.has("plugins.bundle.config"),
-    "没有注册 plugins.bundle.config；实际=" + JSON.stringify([...names]));
-  assert.ok(names.has("plugins.row.config"),
-    "没有注册 plugins.row.config；实际=" + JSON.stringify([...names]));
-  assert.ok(!names.has("settings.section"),
-    "仍注册到宿主设置导航 settings.section（用户要求挪走）");
+  assert.ok(names.has("settings.section"),
+    "没有注册 settings.section；实际=" + JSON.stringify([...names]));
+  assert.ok(names.has("settings.section.icon"),
+    "没有注册 settings.section.icon（导航里会回落成默认齿轮）；实际="
+    + JSON.stringify([...names]));
+  assert.ok(!names.has("plugins.bundle.config") && !names.has("plugins.row.config"),
+    "仍在注册插件页的配置区（用户要求整体移到设置里）；实际="
+    + JSON.stringify([...names]));
+
+  // 页和图标必须用**同一个 id**：宿主按 `only: row.id` 派发图标，
+  // id 对不上就静默回落成默认齿轮 —— 页面照常出现，看不出任何错误。
+  const section = regs.find((r) => r.name === "settings.section");
+  const icon = regs.find((r) => r.name === "settings.section.icon");
+  assert.equal(section.id, pkg.name, "页面 id 必须等于包名（会被 settings.section.icon 按 id 匹配）");
+  assert.equal(icon.id, section.id,
+    "图标 id 与页面 id 不一致 → 导航里显示默认齿轮，且不会报错；实际="
+    + JSON.stringify({ section: section.id, icon: icon.id }));
 });
 
-test("两种包名拼写都注册（裸名 + include: 前缀）", () => {
+test("页面与图标在同一个 inject 回调里注册（配对是结构性的）", () => {
+  // 兄弟插件 2.1.17 的教训：页和图标用**两个独立的** slots.inject() 注册，
+  // 页面出来了、图标却是默认齿轮 —— 因为图标的 cell 只在"页的 id 存在"时才有
+  // 意义，而两次 inject 各自等待自己的声明。放在同一个回调里，配对关系由结构
+  // 保证，而不是靠约定。
+  //
+  // 这里同时锁住 disposer 的成对回收：注册返回的清理器必须能一起撤销，
+  // 否则禁用插件后导航里会留下一个点不动的空页。
   const { exports: mod } = runApply();
   const calls = [];
+  const disposed = [];
+  const teardowns = new Map();
   const ctx = {
     slots: {
-      inject(slotName, cb) { calls.push({ kind: "inject", slotName }); cb(); },
-      register(opts) {
-        calls.push({ kind: "register", name: opts.name, key: opts.key });
+      inject(slotName, cb) {
+        calls.push({ kind: "inject", slotName });
+        const d = cb();
+        // 按槽位名记，不用数组：图标那次 inject 是**嵌套在**页面回调里的，
+        // 它会先返回，数组里的第一个反而是图标 —— 那样拿到的清理器只撤图标。
+        teardowns.set(slotName, d);
+        // 真实 cordis 里 `inject()` 返回的是「撤销这次注入」的清理器，
+        // 与回调返回的处置器是**两个不同**的函数。夹具必须照这一点写：
+        // 直接返回 cb() 的返回值，会让同一个函数被 `disposers` 收两次、
+        // 撤销时记两笔，看不出真实行为。
         return () => {};
+      },
+      register(opts) {
+        calls.push({ kind: "register", name: opts.name, id: opts.id });
+        return () => disposed.push(opts.name);
       },
     },
     effect() {}, get() { return undefined; },
     logger: { info() {}, warn() {}, error() {} },
   };
   mod.apply(ctx);
-  const regs = calls.filter((c) => c.kind === "register");
-  const keys = regs.map((r) => r.key);
-  assert.ok(keys.includes(pkg.name),
-    "缺少裸包名注册；实际=" + JSON.stringify(keys));
-  assert.ok(keys.includes(`include:${pkg.name}`),
-    "缺少 include: 前缀注册（只注册裸名会让 include: 挂载下整页空白）；实际="
-    + JSON.stringify(keys));
-  // 行入口的键必须是 `<包名>#<行 id>` 形状，否则插件页的行上不会出现配置入口
-  const rowKeys = regs.filter((r) => r.name === "plugins.row.config").map((r) => r.key);
-  assert.ok(rowKeys.length > 0 && rowKeys.every((k) => k.includes("#")),
-    "plugins.row.config 的键必须是 <包名>#<行 id>；实际=" + JSON.stringify(rowKeys));
+
+  // 顺序证明"同一个回调"：`inject(settings.section)` 的回调**先**把页面注册掉，
+  // 然后才 inject 图标 —— 所以图标那一次 inject 必定出现在页面 register 之后。
+  // 反例（兄弟插件 2.1.17 的写法）是两次 inject 并列在最外层，页面与图标的
+  // 注册都发生在外层，顺序会变成 inject / inject / register / register。
+  const order = calls.map((c) => c.kind + ":" + (c.slotName ?? c.name));
+  assert.deepEqual(order,
+    ["inject:settings.section", "register:settings.section",
+     "inject:settings.section.icon", "register:settings.section.icon"],
+    "页与图标必须成对注册在 settings.section 的回调里（先页、后图标）；实际="
+    + JSON.stringify(order));
+
+  // 撤销：外层 inject 回调返回的清理器必须把**页和图标都**撤掉。
+  // 少撤一个的表现是：禁用插件后导航里留一个点不动的空页（页撤了、图标没撤），
+  // 或图标消失而页面还在（反过来）。两种都不报错，只能靠这条守住。
+  const outer = teardowns.get("settings.section");
+  assert.ok(typeof outer === "function",
+    "settings.section 的 inject 回调没有返回清理器（禁用插件后页面撤不掉）");
+  outer();
+  assert.deepEqual(disposed.sort(),
+    ["settings.section", "settings.section.icon"],
+    "清理器没有把页与图标都撤销；实际撤销=" + JSON.stringify(disposed));
 });
 
 function statMs(path) {
@@ -808,10 +857,23 @@ test("渲染：运行中状态下面板不再出现「门户进程 / 停止门�
     return out;
   };
 
-  const comp = registered.map((r) => r.comp).find((f) => typeof f === "function");
-  assert.ok(comp, "没有注册可渲染的设置面板组件");
+  // 注册进 settings.section 的是**页面外壳**（ServicePortalSection），
+  // 内容组件由它渲染。这里把两层都跑一遍：先拿外壳，再拿它产出的内容组件 ——
+  // 顺带证明外壳确实把 `chrome: false` 传下去了（设置页里不该再套一张卡）。
+  const comp = registered
+    .filter((r) => r.name === "settings.section")
+    .map((r) => r.comp)
+    .find((f) => typeof f === "function");
+  assert.ok(comp, "没有注册可渲染的设置面板组件（settings.section 上没有组件）");
+
+  const sectionEl = comp({ close: () => {}, ctx });
+  assert.equal(sectionEl && sectionEl.props && sectionEl.props.chrome, false,
+    "页面外壳没有给内容组件传 chrome:false —— 设置页里会多出一张卡片（卡里套卡）");
+
+  const tab = sectionEl && sectionEl.type;
+  assert.equal(typeof tab, "function", "页面外壳没有渲染出内容组件");
   nth = 0;
-  const text = flatten(comp({ view: "page", ctx })).join(" | ");
+  const text = flatten(tab(Object.assign({}, sectionEl.props, { ctx }))).join(" | ");
 
   // 先证明"确实渲染到了运行中那一屏"，否则下面的断言毫无意义（假通过）
   assert.match(text, /公网访问|外网访问|局域网/,

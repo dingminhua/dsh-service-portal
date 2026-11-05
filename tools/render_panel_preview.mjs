@@ -347,7 +347,19 @@ function styleValue(prop, val) {
 (async () => {
   try {
     let Comp = null;
-    const ctx = { slots: { inject: (s, fn) => fn(), register: (c, comp) => { Comp = comp; } } };
+    let IconComp = null;
+    // 按**槽位名**选组件：页从 settings.section 来，图标从 settings.section.icon 来。
+    // 不按"第几次注册"选 —— 图标是嵌套在页面回调里注册的，取错就会把导航图标
+    // 当成整页渲染出来（一张 16px 的图标铺满页面）。
+    const ctx = {
+      slots: {
+        inject: (s, fn) => fn(),
+        register: (c, comp) => {
+          if (c && c.name === "settings.section.icon") IconComp = comp;
+          else Comp = comp;
+        },
+      },
+    };
     const root = document.getElementById("root");
     const inst = {
       hooks: {}, effects: {}, refs: {}, cursor: 0, pending: false, draw() {

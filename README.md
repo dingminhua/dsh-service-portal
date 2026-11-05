@@ -10,7 +10,7 @@
   <a href="README.en.md">English</a> ·
   <a href="#安装">安装</a> ·
   <a href="#工作原理">工作原理</a> ·
-  <a href="#在插件设置里管理节点">节点管理</a> ·
+  <a href="#在设置里管理节点">节点管理</a> ·
   <a href="CHANGELOG.md">更新日志</a> ·
   <a href="https://github.com/dingminhua/dsh-service-portal/issues">问题反馈</a>
 </p>
@@ -40,7 +40,7 @@
   与点按钮等效。设置页会明说当前是哪一种，不让你猜。
 - **设置页就是 dsh-pocket 那个形态** —— 局域网、公网两个区块，各自带开关 + 二维码 +
   地址 + 访问密码行 + 高级（手动选地址）。
-- **节点管理就在插件设置里**（插件页 → 该插件 → 配置）—— 添加节点（名称 / 对外路径 / 本机端口 / 备注）、
+- **节点管理就在设置页里**（设置 → 左侧导航「对外服务门户」）—— 添加节点（名称 / 对外路径 / 本机端口 / 备注）、
   **开放 / 屏蔽**（路由闸门）、编辑、删除，以及每个节点的**两个访问入口**：
   「内网访问」（走局域网地址）与「公网访问」（走隧道地址）。
   两者**各自按自己的开关判断能否点击** —— 关掉局域网后内网按钮变灰、公网照常可用；
@@ -56,7 +56,7 @@
   - 「上游有响应，但它自己返回了 HTTP 502」= 上游在线、是它内部出错。
     最后这条必须和上一条**分开说** —— 状态码一样，把上游自己的错报成
     「没启动」会让人去启动一个本来就在跑的程序。
-  **没有任何设置功能** —— 要改配置请到 DSH 插件页里该插件自己的配置里。
+  **没有任何设置功能** —— 要改配置请到 DSH **设置 → 对外服务门户**。
 - **内网 + 外网两种访问** —— 同一张页面，两条入口：
   - 内网（`http://192.168.x.x:8899`）默认**免密**，同一 WiFi 下手机/平板直接打开。
     可开「局域网访问密码」，也可以直接关掉整个局域网访问；
@@ -83,7 +83,7 @@
 口令是示例串。README 里不放任何真实地址或口令。
 
 <p align="center">
-  <img src="docs/assets/panel-both.png" width="760" alt="插件设置页：局域网与公网两条入口，各带二维码、地址与口令">
+  <img src="docs/assets/panel-both.png" width="760" alt="设置页：局域网与公网两条入口，各带二维码、地址与口令">
   <br>
   <sub><b>设置页</b>：内网 / 公网两条入口并排，各自判断开关；扫码即开，节点增删在此</sub>
 </p>
@@ -177,8 +177,8 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 | 字段 | 值 | 作用 |
 | :--- | :--- | :--- |
-| `engines.node` | `>=24` | 对齐 DSH 0.2.1-rc.1 自带运行时（Node 24.21.0） |
-| `engines.dsh` | `>=0.2.1-rc.1 <0.3.0-0` | **DSH 版本门禁**：声明了它，宿主就只按它判定，忽略 `@deepseek-ai/dsh*` 的 peer 区间 |
+| `engines.node` | `>=24` | 对齐 DSH 自带运行时（Node 24.21.0） |
+| `engines.dsh` | `>=0.2.1-rc.5 <0.3.0-0` | **DSH 版本门禁**：声明了它，宿主就只按它判定，忽略 `@deepseek-ai/dsh*` 的 peer 区间 |
 | `dsh.manifestVersion` | `1` | 插件清单格式标识（前瞻声明，当前宿主不强制） |
 
 为什么必须写 `engines.dsh`：旧写法只声明 `@deepseek-ai/cordis` / `schemastery` 的 peer 区间，
@@ -218,7 +218,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 | 插件用到的 | rc.5 现状 |
 | :--- | :--- |
-| `plugins.bundle.config` / `plugins.row.config` 槽位 | 仍是 `keyed` / `root` / `key` 必填，键仍是 `<包名>#<行 id>` |
+| `settings.section` / `settings.section.icon` 槽位 | 仍是 `list` / `root` / `id` 必填；图标的 id 必须等于页面的 id（1.1.0 起用它们） |
 | `webServer.register({kind:'prefix', path, handler})` | 未变（`dsh-host-webserver` 的路由契约一致） |
 | `Config`（schemastery `z.object` + `volatile()`） | 未变；宿主随包分发的 schemastery 3.18.5 在插件区间内 |
 | `dsh.client` 清单字段（`platform: web` + `exports["./client"]`） | 未变 |
@@ -309,11 +309,11 @@ ELECTRON_RUN_AS_NODE=1 "$APP/../MacOS/DeepSeek Harness" \
 
 未知子路径返回 **404**（不拿 status 兜底——拼错的路径不许「看起来能用」）。
 
-## 在插件设置里管理节点
+## 在设置里管理节点
 
-在 DSH 里打开 **设置 → 插件 → 找到 dsh-service-portal → 配置**，
-就在那里管理要对外发布的路由（注册在插件页的 `plugins.bundle.config` /
-`plugins.row.config` 槽位，与 workbuddy 同一形态；**不会**占用宿主设置的左侧导航）。
+在 DSH 里打开 **设置 → 左侧导航「对外服务门户」**，
+就在那里管理要对外发布的路由（注册在宿主的 `settings.section` 槽位，
+与左侧的「通用 / 模型 / 插件」平级；导航图标是本插件的品牌标记，不是默认齿轮）。
 每个节点一条卡片：
 
 | 操作 | 说明 |
@@ -336,7 +336,7 @@ ELECTRON_RUN_AS_NODE=1 "$APP/../MacOS/DeepSeek Harness" \
 页首左侧是插件 logo（与设置页同一张图），右侧是「鼓励一下 ★」（去 GitHub 点星）；
 窄屏自动换行，按钮拉成全宽。
 页面上**不再列访问地址**：进门户本来就是扫码/点链接来的，地址就在浏览器
-地址栏里；要复制地址或看二维码，到插件设置页。
+地址栏里；要复制地址或看二维码，到 **设置 → 对外服务门户**。
 
 「测试」的三种结论（真机用 Chrome 点过，三种都对且各不相同）：
 
@@ -517,14 +517,14 @@ cloudflared 隧道域名（你发出去的地址就废了）。所以另起一�
 
 ## 安全边界（必须如实理解）
 
-- 口令是**明文**存在 `runs/public_gui_credentials.json` 并明文显示在插件设置页。
+- 口令是**明文**存在 `runs/public_gui_credentials.json` 并明文显示在设置页。
 - **拿到口令 == 能改对外发布的路由**。持有效会话者可以调用 `/api/services*`
   增删节点、开放或屏蔽路由。但它**不能**启停你的上游程序 —— 本插件已不做启停
   （所以拿口令的人无法借这里去停 5090 上的训练）。对 ld-rl-poker 而言，
   风险面从"能启停训练"缩小到"能改发布出去的路由"。
 - **局域网免密时，同 WiFi 上的人也能读改节点**（`/_api/services` 不需要口令）。
   这是"内网免密"体验的代价；不想承担就开「局域网访问密码」或关掉局域网访问。
-  节点管理搬到插件设置后，日常操作走宿主转发（127.0.0.1），不必再开着控制台页面。
+  节点管理搬到设置页后，日常操作走宿主转发（127.0.0.1），不必再开着控制台页面。
 - 有些本地服务**自身没有认证**（两个 GUI、Ollama 等），挂出去就等于公开——
   门户这层口令是它们唯一的关卡。
 - 本插件**不会**碰 dsh-pocket 自己的隧道（目标 3081）；`--stop` 只停自己记录的进程。

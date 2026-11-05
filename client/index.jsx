@@ -148,7 +148,7 @@ const CARD_CSS = `/* ===========================================================
    ========================================================================== */
 
 /* 本地变量：把"令牌名 + 兜底"收在一处，明暗主题都由宿主令牌切换。 */
-.dsp-root,.dsp-card{
+.dsp-root,.dsp-card,.dsp-section{
   --dsp-r-sm:var(--dsw-radius-sm,8px);
   --dsp-r-md:var(--dsw-radius-md,12px);
   --dsp-r-lg:var(--dsw-radius-lg,16px);
@@ -210,6 +210,18 @@ const CARD_CSS = `/* ===========================================================
 }
 .dsp-card,.dsp-card *{box-sizing:border-box}
 .dsp-card h4,.dsp-card h5,.dsp-card p,.dsp-card ul{margin:0}
+
+/* ---- 设置导航里的整页容器（chrome=false）----
+   与 .dsp-card 的差别只有"不画卡"：不描边、不圆角、不写死宽度。
+   宿主设置页已经给了内容列宽度与页面留白，这里再画一层就是卡里套卡；
+   再写 max-width:960 还会在宽屏上与内置页面的对齐线下产生一条可见偏差
+   （内置页是**满列**的）。主题变量与 .dsp-card 共用上面那条规则。 */
+.dsp-section{
+  box-sizing:border-box;width:100%;padding:0;
+  color:var(--dsp-t1);
+}
+.dsp-section,.dsp-section *{box-sizing:border-box}
+.dsp-section h4,.dsp-section h5,.dsp-section p,.dsp-section ul{margin:0}
 
 /* ---- 顶部：图标 + 身份 + 状态 ---- */
 .dsp-hero{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
@@ -666,12 +678,32 @@ function ConfirmDialog({ open, title, lines, extra, tone, confirmTone, confirmLa
   );
 }
 
+function ServicePortalSection(props) {
+  // 注册进 `settings.section` 的那个组件：**页面外壳**，不是内容本身。
+  //
+  // 为什么不在注册处直接挂 `ServicePortalSettingsTab`：那个组件按
+  // "插件页里的配置卡片"长出来（`.dsp-card` 自带描边、圆角、`max-width:960`）。
+  // 设置导航的页面已经由宿主给好了内容列与留白，再套一层卡就是卡里套卡，
+  // 960 的宽度上限还会让本页与内置页面的对齐线错开一截。
+  //
+  // 宿主的 section 组件收到的是 `{ close }`（**没有** `view`），所以这里用
+  // 一个显式 prop 传下去，而不是让子组件去猜 `view === "page"`：
+  // 猜错的两种表现（多一张卡 / 少一张卡）都不会报错，只能靠肉眼发现。
+  return h(ServicePortalSettingsTab, Object.assign({}, props, { chrome: false }));
+}
+
 function ServicePortalSettingsTab(props) {
-  // 插件页会给 `view`：
-  //   · `summary` —— 只渲染一行摘要（列表折叠态、或行入口的预览）
-  //   · `page`    —— 渲染完整配置页（含保存控件）
-  // 这里两种都要能出东西，否则折叠态是一个空壳。
+  // `view` 只有预览 harness（tools/render_panel_preview.mjs）还会传，
+  // 用来单独看那一行摘要。**真实宿主不再传它**：配置页现在是设置导航里的
+  // 一整页（`settings.section`），既没有折叠态也没有行入口。
   const view = props && typeof props.view === "string" ? props.view : "page";
+
+  // 宿主设置页自带页面容器与左侧导航，所以在那里**不再**套 `.dsp-card`：
+  // 那会在页面里再画一张卡片（两层边框、两层留白）。
+  // 由 `ServicePortalSection` 显式传 `chrome: false`，不靠 `view` 猜 ——
+  // 设置页的 props 里根本没有 `view`，猜错的表现是"设置页里多出一张卡"，
+  // 而预览 harness 又恰好是同一个形状，两边都看不出来。
+  const chrome = !(props && props.chrome === false);
   const [status, setStatus] = React.useState(null);
   const [busy, setBusy] = React.useState("");
   const [error, setError] = React.useState(null);
@@ -1090,10 +1122,10 @@ function ServicePortalSettingsTab(props) {
   const password = status && status.password;
   const port = (status && status.portalPort) || 8899;
 
-  // ---- view=summary：插件列表行只要一行摘要 ----------------------------------
+  // ---- view=summary：预览 harness 单独看那一行摘要（真实宿主已不再派发）----
   //
-  // 行入口（plugins.row.config）与 bundle 卡片的折叠态都用它；在那里渲染完整
-  // 表单会很怪，所以先判掉。
+  // 配置页搬到设置导航后就只剩"一整页"这一种形态了；这里保留这条分支是因为
+  // 预览 harness 用它单独截那张摘要，删掉它等于删掉一处可核对的产物。
   if (view === "summary") {
     if (!status) return h("span", { className: "dsp-hint" }, "对外服务门户");
     const n = ((status && status.services) || []).length;
@@ -1935,7 +1967,11 @@ function ServicePortalSettingsTab(props) {
 
   children.push(h("div", { key: "body", className: "dsp-body" }, body));
 
-  const card = h("div", { className: "dsp-card" }, children);
+  // `chrome=false`（设置导航里的整页）用 `.dsp-section` 容器：没有描边、没有
+  // 圆角、不再写死 960 宽度 —— 页面本身已经由宿主给了内容列的边界，再画一层
+  // 卡片就是"卡里套卡"。`chrome=true` 保留 `.dsp-card`，供预览 harness 与
+  // 以后可能出现的嵌入式入口使用。
+  const card = h("div", { className: chrome ? "dsp-card" : "dsp-section" }, children);
 
   // ---- 两个确认框 + Toast：都挂在根上（弹框用 fixed 定位，不受卡片布局影响）----
   //
@@ -2013,56 +2049,106 @@ function ServicePortalSettingsTab(props) {
 }
 
 export function apply(ctx) {
-  // ============ 注册位置：插件页的「插件配置」，不是宿主设置导航 ============
+  // ============ 注册位置：宿主「设置」左侧导航里的一整页 ============
   //
-  // 用户要求：「插件设置要放到插件设置里，而不是出现在宿主的设置里，你看看
-  // workbuddy 是怎么做的」。
+  // 用户要求：「设置的内容转移到设置里」—— 配置入口从插件详情页里的配置区
+  // **整体搬到**设置面板左侧导航的独立页面（原先那两个 keyed 槽位已全部移除）。
+  // 这与本地兄弟 dsh-subagent-default-model 2.2.0 的做法一致。
   //
-  // 我原来注册的是 `settings.section` —— 那是**宿主设置左侧导航的一整页**，
-  // 于是「对外服务门户」和「通用 / 模型 / 插件 / 智能体预设」并列，看起来像
-  // 宿主自带的功能，而不是这个插件的设置。
+  // 为什么要用 `settings.section`：它是宿主给第三方插件的**一等设置页**槽位
+  // （0.2.1-rc.5 起）。注册一项就等于在左侧导航里占一行、右侧占一整页，
+  // 和「通用 / 模型 / 插件 / 智能体预设」平级，而不是缩在插件详情页的一角。
   //
-  // 参照 workbuddy（以及本地兄弟 dsh-subagent-default-model）的注册方式：
-  // 它们**完全不用** `settings.section`，而是注册到插件页的两个 keyed 槽位：
-  //   · `plugins.bundle.config`  —— 该 bundle 的页面上，描述与行之间（view:'page'）
-  //   · `plugins.row.config`     —— 该 bundle 声明的某一"行"的配置页，
-  //                                 键是 `<包名>#<行 id>`，该行会多一个配置入口
+  // 历史（别再翻回去）：
+  //   · 0.8.3 从 `settings.section` 改到了插件页的两个 keyed 配置槽位，理由是
+  //     "插件设置要放在插件页里"；
+  //   · 1.1.0 又搬回来，是因为配置项从「两三个开关」长成了「节点管理 + 两条
+  //     入口栏 + 二维码」，插件详情页那一角已经装不下，且入口藏得太深。
   //
-  // 键要注册**每种拼写**：插件页按 key 精确匹配库存里的包名，而部署可以
-  // 用任意名字挂载（workbuddy 的 issue #55 就是只注册了裸名、实际挂在
-  // `include:` 前缀下，结果**整页空白且不报任何错**）。
-  //
-  // 两个槽位都注册是**互补而非冲突**：它们在不同的 cell 里，各自独立渲染 ——
-  // bundle 页给一个内嵌配置区，行入口给一个独立配置页。
-  const PKG = name;
-  const CARD_KEYS = [PKG, `include:${PKG}`];
+  // **不做能力探测。** `slots.inject()` 本身就是探测：它等待槽位声明，宿主
+  // 声明了才执行回调，没声明就什么都不做、也不抛错。反过来，在它外面再套一层
+  // "先问一下 slots 上有没有某个访问器"的能力探测才是真正的坑 —— 兄弟插件
+  // 2.1.18 就是探测了一个只在渲染器内部存在的访问器，判恒为 false，
+  // 整段注册被静默跳过，界面上一点痕迹都没有。
+  const SECTION_ID = name;
 
-  const registerCard = (slotName, key) => {
-    try {
-      ctx.slots.inject(slotName, () =>
-        ctx.slots.register(
-          {
-            name: slotName,
-            key,
-            priority: 30,
-            inject: () => ({}),
-          },
-          ServicePortalSettingsTab,
-        ),
-      );
-    } catch (error) {
-      // 逐个槽位隔离：一个注册失败不能把另一个也带下去
-      // （workbuddy 用同样的 try/catch 让"没卡片"和"成功了"可区分）
-      console.error(
-        `[${PKG}] 槽位 "${slotName}"（key=${key}）注册失败（宿主的 provider 不受影响）:`,
-        error,
-      );
-    }
-  };
+  // 页与图标在**同一个** `inject` 回调里注册，disposer 成对返回。
+  // 两次独立的 `slots.inject()` 看起来等价，其实不是：各自等待自己的声明，
+  // 而图标的 cell 只在"页的 id 存在"时才有意义。放在一个回调里，配对关系
+  // 是结构性的，而不是一条注释里的约定（兄弟插件 2.1.17 就是分开注册，
+  // 结果导航里只有默认齿轮、看不出任何错误）。
+  try {
+    ctx.slots.inject("settings.section", () => {
+      const disposers = [];
 
-  for (const key of CARD_KEYS) {
-    registerCard("plugins.bundle.config", key);
-    registerCard("plugins.row.config", `${key}#${key}`);
+      disposers.push(ctx.slots.register(
+        {
+          name: "settings.section",
+          id: SECTION_ID,
+          // 内置页的顺序是 account -10 / general 0 / models 10 / plugins 15 /
+          // agent-presets 20；第三方页排在它们之后。40 给 dsh-market 留着（它也用 40），
+          // 同值时按注册先后排，所以这里取 35，落在「插件」与「子代理默认模型」之间，
+          // 不与人撞值。
+          order: 35,
+          label: "对外服务门户",
+          inject: () => ({}),
+        },
+        ServicePortalSection,
+      ));
+
+      // 导航图标：按**同一个 id** 寻址。宿主渲染的是
+      // `renderSlot("settings.section.icon", …, { only: row.id })`，
+      // id 对不上就静默回落成通用齿轮 —— 页面上看不出任何错误。
+      // `inline: true` 的槽位会把 cell 包进 <span>，所以这里给一个按
+      // `props.size` 定边的 <img>。
+      try {
+        const iconInject = ctx.slots.inject("settings.section.icon", () => {
+          const iconDisposer = ctx.slots.register(
+            { name: "settings.section.icon", id: SECTION_ID },
+            (iconProps) => {
+              const edge = iconProps && typeof iconProps.size === "number"
+                ? iconProps.size : 16;
+              return h("img", {
+                src: SERVICE_PORTAL_PLUGIN_ICON,
+                alt: "",
+                width: edge,
+                height: edge,
+                style: {
+                  width: edge + "px",
+                  height: edge + "px",
+                  borderRadius: "3px",
+                  display: "block",
+                  objectFit: "contain",
+                  // 未选中时略淡：宿主用同一尺寸渲染所有页的图标，
+                  // 选中态靠这点透明度差异才有区分。
+                  opacity: iconProps && iconProps.active === false ? 0.75 : 1,
+                },
+              });
+            },
+          );
+          disposers.push(iconDisposer);
+          return iconDisposer;
+        });
+        if (typeof iconInject === "function") disposers.push(iconInject);
+      } catch (error) {
+        // 图标失败不能把整页带下去（没有图标只是回落成默认齿轮）
+        console.error(
+          "[dsh-service-portal] settings.section.icon 注册失败（页面本身不受影响）:",
+          error,
+        );
+      }
+
+      return () => {
+        for (const dispose of disposers) {
+          if (typeof dispose === "function") dispose();
+        }
+      };
+    });
+  } catch (error) {
+    console.error(
+      "[dsh-service-portal] settings.section 页面注册失败（宿主的其它功能不受影响）:",
+      error,
+    );
   }
 }
 
