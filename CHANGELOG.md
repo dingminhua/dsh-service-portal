@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.0.10 (2026-11-05)
+
+**跟随宿主升级：DSH 0.2.1-rc.5 → 0.2.2-rc.1。插件代码零改动；把「升级后怎么自查」
+从一段手工命令收成一条 `npm run test:host`。**
+
+宿主升到 **0.2.2-rc.1**。这一版没有随包发布 changelog（GitHub API 403、raw CHANGELOG 404），
+所以核对方式换了一种：对 npm 上 0.2.1-rc.5 与 0.2.2-rc.1 的官方 tarball 逐文件 diff，
+并先证明本机 `app.asar` 里的关键包与 registry 构件逐字节一致（8 个包、145 个文件，0 处差异）。
+下列结论是**已观测差异**，不是官方发布说明。
+
+### 宿主这一版改了什么（与插件作者相关的部分）
+
+| 宿主改动 | 涉及包 | 与本插件的关系 |
+| :--- | :--- | :--- |
+| 移除 `Fiber.store`，改 `committed` + `provisions`；`update()` 可 await；新增 `rawConfig` / `resolveConfig` | cordis 4.0.5 → 4.1.0 | 不涉及：只用 `ctx.inject` / `ctx.logger`，不碰 fiber/store |
+| `EntryTree.write()` → `commit(change)`；`Include.write()` 删除、新增 `flush()` 与三方 reconcile | loader 1.0.6 → 1.1.0 / include 1.0.10 → 1.1.0 | 不涉及：只发声明式 `cordis.patch.yml`（`insert` 三行），不写配置树 |
+| 清单新增 `dsh.bundle.platforms` / `listedByDefault`，由 app-boot 强制校验 | package-manifest | 不声明：两者都可选；声明 `platforms` 反而会挡掉未列出的平台 |
+| 服务新增 `readBundleDetail` / `listVersions` / `updateBundle`（模型侧工具 action 仍 8 个） | plugin-manager | 不涉及：本插件不调用该服务 |
+| schemastery `~3.18.5` → `~3.19.0` | base | 已覆盖：宿主成功投影本插件（用 3.18.4 构建）的 Config schema |
+
+### 逐项复核：插件依赖的接口都没变
+
+| 插件用到的 | 0.2.2-rc.1 实测 |
+| :--- | :--- |
+| `plugins.bundle.config` / `plugins.row.config` 槽位 | 仍是 `keyed` / `root`，键仍是 `<包名>#<行 id>`；两个 key 的 occupant 都 `active: true` |
+| `webServer.register` + `/service-portal/api` | 未变：`GET /status` 返回真实状态（门户在跑） |
+| `Config`（schemastery `z.object` + `volatile()`） | 宿主投影出完整 JSON Schema（`acceptsMissing: true`） |
+| `dsh.client`（`platform: web` + `exports["./client"]`） | 未变：客户端产物仍以 `__ModuleLoader__.load` 注册成功 |
+| `engines.dsh` 门禁 | 未变（`includePrerelease` 语义）：`>=0.2.1-rc.1 <0.3.0-0` 判本插件相容 |
+| 主题令牌（`button-primary-fill`、`label-primary-foreground` 等） | 20/20 仍在宿主 CSS 里；插件侧本来每条都有 fallback |
+
+运行时实测：`plugins.bundle.config` / `plugins.row.config` 里都能看到
+`registrant: dsh-service-portal`、`priority: 30`、`active: true`；`/service-portal/api/status`
+返回 200 且 `running: true`。
+
+### Tests
+
+- 新增 `npm run test:host`（`tools/test_host.mjs`）：一条命令用**宿主自己的运行时**跑完
+  四个套件（160 项、0 skip）。宿主在 `app.asar` 里时自动改用宿主自带的 Electron 当 node；
+  找不到宿主时返回 **2（跳过）**，不会把 skip 显示成通过。此前 `npm test` 在普通 node 下
+  会静默 skip 10 项。
+- 实测：0.2.2-rc.1 上 `npm run test:host` → 160/160，其中宿主门禁与契约 23/23。
+
+### Docs
+
+- README「兼容的 DSH 版本」：已验证版本补上 0.2.2-rc.1，新增 0.2.2 变更对照表；
+  测试清单改用 `npm run test:host`，并把过期用例数（156→160、客户端 42→46）改正。
+- README.en.md 同步「Verified against」；RELEASING.md 第 1 步改用 `npm run test:host`。
+
 ## 1.0.9 (2026-10-31)
 
 **设置页样式全面体检：主按钮不再是纯文字，语义色过 WCAG AA，命中区达标。**
