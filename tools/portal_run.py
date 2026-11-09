@@ -1002,6 +1002,64 @@ def run_portal(args):
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
+    # ---- 先把「我起来了」落盘，再去建隧道 ----
+    #
+    # 这里有**两个**必须尽早写盘的消费者：
+    #   · 宿主（lib/index.js readPortalStatus）：端口在听就算「运行中」，
+    #     靠状态文件里的 portal_pid 判归属、靠 password 显示口令；
+    #   · 退出收尾：pid 对不上就不代关，pid 缺失同样会判「不确定 → 不动」。
+    #
+    # 原来这段状态只在**隧道建立之后**写一次。--lan-only 时不建隧道，窗口小；
+    # 但一旦要建隧道（真机最常见的路径），中间可能是好几秒 —— 这期间端口
+    # 已经在听、状态文件却还是上一轮（或根本不存在）：宿主拿到的
+    # portal_pid / password 全是旧的或 null。
+    #
+    # CI 上就是这么红的（Windows，test/host.test.mjs「退出收尾：pid 匹配且
+    # 端口在听」）：`status.running` 抛 `Cannot read properties of null` ——
+    # readPortalStatus 在状态文件不存在时返回 null。macOS 上本地跑 20 次
+    # 窗口只有 5–17ms，Windows 的文件写入慢一个数量级，窗口被放大到能被
+    # 轮询撞上。**测试不是不稳定，是它正确地撞上了一个真实的竞态。**
+    #
+    # 顺序：端口在听 → 立刻写一份最小可用状态（pid/端口/口令/地址）→
+    # 再去建隧道 → 隧道回来后再补一次完整状态（public_url 此时才有）。
+    # 两次写的字段是**包含关系**，后一次覆盖前一次，不会丢东西。
+
+    # 启动时刻**只取一次**：publish_state 写两次，各自取 now 的话 started_at
+    # 会跳 1–2 秒 —— 设置页显示的「启动于」比真实晚，同一个进程前后读两次
+    # 还会得到两个不同的值。
+    startup_clock = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def publish_state():
+        """把「门户此刻的状态」落盘（完整字段，幂等）。
+
+        抽成函数是因为它要在**两个时刻**各写一次，且两次字段必须完全一致：
+          1. 端口一开始监听、建隧道**之前**（让宿主立刻看到 pid/口令/地址）；
+          2. 隧道建完**之后**（public_url 这时才有值）。
+        写成两份拷贝的话，以后往状态里加字段只会改一处，另一处就悄悄过时。
+        """
+        snap = state_snapshot()
+        save_state({
+            "portal_port": args.port,
+            "portal_pid": os.getpid(),
+            "password": password,
+            "public_url": public_url_holder["url"],
+            "lan_urls": snap["lan_urls"],
+            # 候选列表也要落盘：设置页「高级·手动选地址」的下拉框靠它列出可选项。
+            # 早先**没写这个字段**，宿主读回来永远是空数组 —— 下拉框里只有
+            # 「自动（推荐）」一项，用户看不到也选不到别的地址，
+            # 表现出来就是「自动选地址没有效果」。
+            "lan_candidates": snap["lan_candidates"],
+            "lan_candidate_detail": snap["lan_candidate_detail"],
+            "lan_auth_enabled": bool(runtime["lan_auth"]),
+            "lan_enabled": bool(runtime["lan_enabled"]),
+            "lan_password": runtime["lan_password"],
+            "lan_pin_custom": bool(runtime["lan_pin_custom"]),
+            "lan_ip_override": runtime["lan_ip_override"],
+            "started_at": startup_clock,
+        })
+
+    publish_state()
+
     # ---- 隧道（复用 start_tunnel_now，避免同一段逻辑写两份）----
     if not args.lan_only:
         if not os.path.isfile(args.cloudflared or DEFAULT_CLOUDFLARED):
@@ -1013,25 +1071,8 @@ def run_portal(args):
             if not ok:
                 print("隧道建立失败：%s" % detail, file=sys.stderr)
 
-    save_state({
-        "portal_port": args.port,
-        "portal_pid": os.getpid(),
-        "password": password,
-        "public_url": public_url_holder["url"],
-        "lan_urls": state_snapshot()["lan_urls"],
-        # 候选列表也要落盘：设置页「高级·手动选地址」的下拉框靠它列出可选项。
-        # 早先**没写这个字段**，宿主读回来永远是空数组 —— 下拉框里只有
-        # 「自动（推荐）」一项，用户看不到也选不到别的地址，
-        # 表现出来就是「自动选地址没有效果」。
-        "lan_candidates": state_snapshot()["lan_candidates"],
-        "lan_candidate_detail": state_snapshot()["lan_candidate_detail"],
-        "lan_auth_enabled": bool(runtime["lan_auth"]),
-        "lan_enabled": bool(runtime["lan_enabled"]),
-        "lan_password": runtime["lan_password"],
-        "lan_pin_custom": bool(runtime["lan_pin_custom"]),
-        "lan_ip_override": runtime["lan_ip_override"],
-        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
+    # 隧道建完再写一次：public_url 这时才有值，其余字段与上一轮完全一致。
+    publish_state()
 
     lan_urls = state_snapshot()["lan_urls"]
     print("")

@@ -406,11 +406,48 @@ def main():
 
     # ================= ③ 手动选地址真正生效 =================
     print("\n[③ 「自动设置」真正生效]")
+    # 这两条原先钉的是字面量 `"lan_candidates": state_snapshot()` —— 那是
+    # **实现细节**，不是行为：把取值收进一个 snap 变量（publish_state 里就是
+    # 这么写的）之后字面量不再出现，检验转红，而功能一点没变。
+    # 那种红只会教人「把代码改回去迁就测试」。现在改成断言**行为形状**：
+    # 落盘的那份状态里必须带上这两个键，且值来自快照（而不是空列表/常量）。
+    # 落盘只有一条路径（portal_run.py 的 save_state 调用），所以在函数体内
+    # 找"键出现在 save_state 的字典里"即可；取值来源允许 snap / state_snapshot()。
+    # **只看 save_state({...}) 的那个字典**。
+    # 第一版写成 `'"lan_candidates":' in run`，看着像在验行为，其实恒真：
+    # state_snapshot() 自己就返回一个 `"lan_candidates"` 键（给门户页用的），
+    # 于是把落盘那行删掉，断言照样 PASS —— 假绿。
+    def _saved_state_block(text):
+        start = text.index("def publish_state():")
+        # 找**调用**而不是定义：`text.index("publish_state()", start)` 会命中
+        # `def publish_state():` 那一行里的同一个子串（差一个冒号），切片于是
+        # 空掉 —— 第一版就是这么炸的（ValueError: substring not found）。
+        # 调用行前面一定有换行 + 缩进，拿这个当锚点。
+        end = text.index("\n    publish_state()", start)
+        body = text[start:end]
+        open_paren = body.index("save_state({")
+        depth = 0
+        for idx in range(open_paren, len(body)):
+            if body[idx] == "{":
+                depth += 1
+            elif body[idx] == "}":
+                depth -= 1
+                if depth == 0:
+                    return body[open_paren:idx + 1]
+        return ""
+
+    _saved = _saved_state_block(run) if "def publish_state():" in run else ""
+    _saved_src = dict(re.findall(
+        r'"lan_(candidates|candidate_detail)":\s*([^,\n]+)', _saved))
     check("候选列表写进状态文件（下拉框的数据源）",
-          '"lan_candidates": state_snapshot()' in run,
+          bool(_saved) and "candidates" in _saved_src
+          and ("state_snapshot()" in _saved_src["candidates"]
+               or _saved_src["candidates"].startswith("snap[")),
           "（早先没写 -> 下拉框恒为空 -> 看起来「没效果」）")
     check("候选明细也落盘（显示网卡名）",
-          '"lan_candidate_detail": state_snapshot()' in run)
+          bool(_saved) and "candidate_detail" in _saved_src
+          and ("state_snapshot()" in _saved_src["candidate_detail"]
+               or _saved_src["candidate_detail"].startswith("snap[")))
     check("认证层认「手动选的地址」为内网（优先于按网段判定）",
           "def is_lan_override_host" in proxy
           and "def resolve_request_kind" in proxy)

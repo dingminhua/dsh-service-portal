@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.1.1 (2026-11-09)
+
+**修一个 CI 在 Windows 上暴露的真实竞态**：门户「端口开始监听」与「状态文件写出来」
+之间有一整段窗口，宿主撞进去会拿到 `null`。
+
+### Fixes
+
+**`runs/portal_state.json` 现在在端口一开始监听就写，不等隧道。**
+
+`make_portal_server()` 构造时就绑定并开始监听端口，而状态文件原来只在
+**隧道建立之后**写一次。于是：
+
+- `--lan-only` 时窗口只有 5–17ms（macOS 上本地跑 20 次都测不出来）；
+- **建隧道**那条路（真机最常见）窗口等于隧道建立的耗时，可以到几十秒。
+
+这期间宿主 `readPortalStatus()` 撞进去会直接拿到 `null`
+（状态文件不存在时它返回 null），于是 `status.running` 抛
+`Cannot read properties of null (reading 'running')` —— CI 在 Windows 上红的就是
+`test/host.test.mjs` 的「退出收尾：pid 匹配且端口在听」。**那不是测试不稳定，
+是测试正确地撞上一个真实竞态。** 用户侧等价症状：设置页短暂显示「未运行」，
+或者退出收尾因拿不到 `portal_pid` 而判「不确定 → 不动」，门户变成残留进程。
+
+改法：把落盘抽成 `publish_state()`，**端口在听就先写一次**（pid/端口/口令/地址），
+隧道建完再写一次（那时 `public_url` 才有值）。两次字段完全一致，后一次是前一次的
+超集，不会丢东西。启动时刻 `startup_clock` 只取一次 —— 否则两写之间
+`started_at` 会跳。
+
+### Tests
+
+新增 `tools/check_state_ready_before_tunnel.py`（6 项，已接入 CI）：
+
+- 让隧道阶段**稳定**拖到一分钟量级（把 `--cloudflared` 指向 Python 解释器
+  自己：必然启动失败，日志里没有域名，`read_url` 一路轮询到 75 秒超时），
+  于是「状态文件晚写」从偶发变成**必然**可观测；
+- 断言「端口可连」与「状态文件出现」相差 < 1500ms，且状态里已有
+  `portal_pid` / `portal_port` / `password`；
+- **反例已验**：把 `publish_state()` 挪回隧道之后，该检验转红
+  （`state_at=None`，1/2 通过）。
+
+> 第一版用假的可执行文件（`#!/bin/sh` + `chmod +x`）拖时间，在 Windows 上不成立：
+> `chmod` 是空操作，而且 `subprocess.Popen([cloudflared, ...])` 不经过 shell，
+> `CreateProcess` 无法执行 `.bat`（WinError 193）。那版检验会在它最该保护的
+> 平台上**永远绿** —— 比红更糟。
+
+`tools/check_portal_parity.py` 里两条「候选列表/明细落盘」的断言也修了：
+它们原先钉字面量 `"lan_candidates": state_snapshot()`，把取值收进 `snap` 变量后
+就转红（功能其实没变）。改成断言**落盘字典里真的有这两个键**，并且**只看
+`save_state({...})` 那一段** —— 第一版写成 `'"lan_candidates":' in run` 是恒真的
+（`state_snapshot()` 自己就有一个同名键），把落盘那行删掉照样 PASS。
+现已验证：删掉字段 → 两条转红，加回 → 转绿。
+
+全量：`npm run test:host` 160/160，0 跳过；parity 157/172（15 项为改动前既有）。
+
 ## 1.1.0 (2026-11-06)
 
 **次版本号升级**：配置入口从「插件详情页里的配置区」整体搬到**宿主设置面板左侧

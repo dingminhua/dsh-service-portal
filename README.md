@@ -400,6 +400,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 | `tools/check_portal_add_route.py` | 12 | 添加节点走**宿主 HTTP 路由**的端到端：真 `createHandler` + 真门户 + 真磁盘；**开放/屏蔽**、反例（`restart` 必须被拒、target 非法必须 400 + 明确 error） |
 | `tools/check_gate_does_not_stop_upstream.py` | 17 | **「屏蔽」不得停止上游进程**（用户最关心的一条）：起真上游进程，验屏蔽后 PID 仍活、绕过门户直连仍通、门户不再转发（404）；删除节点也不动上游 |
 | `tools/check_portal_status_running_services.py` | 6 | **添加节点后设置页看不到**：宿主原来从不去问活门户要服务清单（判据漏了 services），修后能读回；反例——门户没跑时必须空数组，不许编造 |
+| `tools/check_state_ready_before_tunnel.py` | 6 | **状态文件晚于端口监听才写**：「端口在听」与「runs/portal_state.json 可读」之间有一整段窗口（建隧道时可达数秒），宿主撞进去就拿到 `null`（CI 在 Windows 上红的 `Cannot read properties of null`）。用「cloudflared 指向解释器自己」把隧道阶段稳定拖到一分钟量级，窗口因此必然可观测（早先造的假可执行文件在 Windows 上 Popen 直接 WinError 193，那条检验在最该保护的平台上永远绿） |
 | `tools/check_shutdown_self_exit.py` | 8 | **第二次点「停止」失败**：`serve_forever` 先起、关闭钩子晚装，那个窗口里 `/_api/shutdown` 回 503「门户还没就绪」，宿主退到 `--stop` 兜底而兜底在沙箱里杀不掉（`stoppedBy=stop-command`）。含源码顺序断言 + 实测「端口一在听就能自退」 |
 | `tools/check_portal_lan_pin.py` | 23 | 局域网口令刷新/自定义；**公网拿局域网口令能进来**（安全边界）、候选列表没落盘 |
 | `tools/check_portal_form.py` | 8 | **控制台表单提交被当成坏 JSON**（页面上点「添加服务」永远失败）、表单没有 key 字段导致必然失败 |
@@ -459,6 +460,7 @@ python -X utf8 tools\check_portal_auth.py
 python -X utf8 tools\check_portal_stop_scope.py
 python -X utf8 tools\check_portal_shutdown.py
 python -X utf8 tools\check_plugin_stop.py
+python -X utf8 tools\check_state_ready_before_tunnel.py
 python -X utf8 tools\check_tunnel_auth.py
 python -X utf8 tools\check_tunnel_domain.py
 python -X utf8 tools\check_plugin.py

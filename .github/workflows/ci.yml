@@ -62,5 +62,14 @@ jobs:
         # 它们不依赖宿主 —— 这两条才是 CI 能拦住的那部分。
         run: node --test test/host-contract.test.mjs
 
+      - name: Portal readiness ordering
+        # 「端口在听」与「runs/portal_state.json 可读」之间不得有窗口。
+        # 这条**必须在 CI 里跑**：它在 macOS 上窗口只有 5–17ms、本地怎么跑都绿，
+        # 而 CI 的 Windows 文件写入慢一个数量级，窗口被放大后才暴露成
+        # `Cannot read properties of null (reading 'running')`。
+        # 检验本身把隧道阶段稳定拖到一分钟量级，把窗口放大成**必然**失败，
+        # 所以在任何平台都能稳定判出回归，不再依赖"偶发"。
+        run: python -X utf8 tools/check_state_ready_before_tunnel.py
+
       - name: Verify package contents
         run: npm pack --dry-run
