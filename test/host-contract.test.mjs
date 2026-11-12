@@ -41,6 +41,51 @@ const skipReason = host === undefined
   : false;
 
 /**
+ * 槽位目录条目的形状。
+ *
+ * 宿主把 `CLIENT_SLOT_API` 当成**源码**打包进产物，所以引号样式随打包器的
+ * 输出格式漂移，而**目录内容不变**：
+ *   · 0.2.2-rc.1 及更早：源码缩进原样保留，双引号
+ *     `key: "settings.section",\n\t\t\t\tkind: "list",\n\t\t\t\tscope: "root"`
+ *   · 0.2.2-rc.2 起：产物重新压平，末尾换成模板字面量
+ *     ``key:`settings.section`,kind:`list`,scope:`root` ``
+ * 所以这里**只认字段名与顺序，不认引号种类** —— 把三种引号都放进字符类，
+ * 并用反向引用要求开闭一致（避免把 `key:`a"` 这种残片当条目）。
+ */
+const SLOT_ENTRY = /key:\s*(["'`])([^"'`]+)\1\s*,\s*kind:\s*(["'`])([^"'`]+)\3\s*,\s*scope:\s*(["'`])([^"'`]+)\5/gu;
+
+/**
+ * 注册项声明的匹配式，同样不认引号种类。
+ * 宿主产物里 `name` / `requirement` 两个字段的引号也跟着打包格式变（见上）。
+ *
+ * @param {string} field 字段名（`name` 或 `requirement`）
+ * @param {string} value 期望值（`id` / `required` …）
+ * @returns {RegExp} 该字段等于该值的匹配式
+ */
+const registrantField = (field, value) =>
+  new RegExp(`${field}:\\s*(["'\`])${value}\\1`, "u");
+
+
+/**
+ * 解析宿主槽位目录的产物原文（纯函数，便于用两种引号风格各打一遍）。
+ *
+ * @param {string} raw 宿主 `dsh-cordis-client-runner/client` 的产物原文
+ * @returns {{entries: Map<string, {kind: string, scope: string, body: string}>}}
+ *   条目表（key → 该条目的片段，供进一步断言注册参数）
+ */
+function parseSlotCatalog(raw) {
+  // 用「下一处 key:」当条目边界，这样每个条目的体里能查 registerOptions。
+  const keys = [...raw.matchAll(SLOT_ENTRY)];
+  const entries = new Map();
+  keys.forEach((m, index) => {
+    const start = m.index ?? 0;
+    const next = keys[index + 1]?.index ?? raw.length;
+    entries.set(m[2], { kind: m[4], scope: m[6], body: raw.slice(start, next) });
+  });
+  return { entries };
+}
+
+/**
  * 读宿主随包分发的**客户端槽位目录**。
  *
  * 为什么读文件而不是 import：`@deepseek-ai/dsh-cordis-client-runner/client`
@@ -56,27 +101,77 @@ function readHostSlotCatalog(entryUrl) {
   const req = hostRequire(entryUrl);
   const entry = req.resolve("@deepseek-ai/dsh-cordis-client-runner/client");
   const raw = readFileSync(entry, "utf8");
-
-  // 条目形状（宿主产物，稳定）：`key: "x", kind: "y", scope: "z"`。
-  // 用「下一处 key:」当条目边界，这样每个条目的体里能查 registerOptions。
-  const keys = [...raw.matchAll(/key:\s*"([^"]+)",\s*kind:\s*"([^"]+)",\s*scope:\s*"([^"]+)"/gu)];
-  const entries = new Map();
-  keys.forEach((m, index) => {
-    const start = m.index ?? 0;
-    const next = keys[index + 1]?.index ?? raw.length;
-    entries.set(m[1], { kind: m[2], scope: m[3], body: raw.slice(start, next) });
-  });
-  return { raw, entries };
+  return { raw, ...parseSlotCatalog(raw) };
 }
 
 // ---------------------------------------------------------------------------
-// 一、宿主仍声明本插件注册的那两个槽位，且形状没变
+// 〇、解析器自身：宿主的两种引号风格都必须解析出来
 //
-// 1.1.0 起配置页搬到宿主设置的左侧导航：注册项是 `settings.section`（页面）
-// 与 `settings.section.icon`（导航图标，按同一个 id 寻址）。两者都是 **list**
-// 槽位、注册 id 必填 —— 与旧的 keyed 配置槽位形状完全不同，所以这里的断言
-// 跟着换掉，不是"放宽"。
+// 这条检验不依赖宿主，**任何环境都跑**。理由是一次真实的红：
+// 宿主 0.2.2-rc.2 把槽位目录重新压平，引号从双引号换成模板字面量，目录内容
+// 一个字都没变，但旧正则只认双引号 → 解析出 0 条 → 三条契约检验一起变红。
+// 那时候红的**不是插件坏了**，是"我们读宿主的方式坏了"，而失败信息看起来
+// 跟"宿主删了槽位"一模一样。所以把两种真实产物形态各钉一份样本。
 // ---------------------------------------------------------------------------
+
+/** 0.2.2-rc.1 及更早的产物形态（源码缩进原样保留，双引号）。 */
+const SLOT_SAMPLE_QUOTED = [
+  "{",
+  "\t\t\tkey: \"settings.section\",",
+  "\t\t\tkind: \"list\",",
+  "\t\t\tscope: \"root\",",
+  "\t\t\tsummary: \"One settings page per list entry.\",",
+  "\t\t\tregisterOptions: [{",
+  "\t\t\t\tname: \"id\",",
+  "\t\t\t\trequirement: \"required\",",
+  "\t\t\t\ttype: \"string\",",
+  "\t\t\t\townerProps: [\"export interface X\"]",
+  "\t\t\t}],",
+  "\t\t\townerProps: [\"\"]",
+  "\t\t}",
+  "",
+].join("\n");
+
+/** 0.2.2-rc.2 起的产物形态（压平，模板字面量）。 */
+const SLOT_SAMPLE_TEMPLATE = [
+  "{",
+  "key:`settings.section`,kind:`list`,scope:`root`,",
+  "summary:`One settings page per list entry.`,",
+  "registerOptions:[{",
+  "name:`id`,",
+  "requirement:`required`,",
+  "type:`string`,",
+  "ownerProps:[`export interface X`]",
+  "}],",
+  "ownerProps:[``]",
+  "},",
+  "",
+].join("\n");
+
+test("解析器：宿主的双引号与模板字面量两种产物形态都解析得出来", () => {
+  for (const [label, sample] of [
+    ["双引号（≤0.2.2-rc.1）", SLOT_SAMPLE_QUOTED],
+    ["模板字面量（0.2.2-rc.2 起）", SLOT_SAMPLE_TEMPLATE],
+  ]) {
+    const { entries } = parseSlotCatalog(sample);
+    const entry = entries.get("settings.section");
+    assert.ok(entry !== undefined,
+      `${label} 形态一个条目都没解析出来 —— 解析正则已失配，契约检验会以`
+      + "\"宿主删了槽位\"的样子误报");
+    assert.equal(entry.kind, "list", `${label}：kind 没解析对`);
+    assert.equal(entry.scope, "root", `${label}：scope 没解析对`);
+    assert.match(entry.body, registrantField("name", "id"),
+      `${label}：注册项 name=id 没解析出来`);
+    assert.match(entry.body, registrantField("requirement", "required"),
+      `${label}：注册项 requirement=required 没解析出来`);
+  }
+
+  // 反例：形状不符的片段不许被当成条目（否则上面的"解析得到"等于空对空）。
+  assert.equal(parseSlotCatalog("key: \"a\", kind: \"list\"({}).length").entries.size, 0,
+    "反例失败：缺少 scope 的片段也被当成了槽位条目");
+  assert.equal(parseSlotCatalog('key: "a", kind: \'list, scope: "root"').entries.size, 0,
+    "反例失败：引号不成对的残片也被当成了槽位条目");
+});
 
 test("宿主槽位目录：设置导航的两个槽位仍是 list / root / id 必填", { skip: skipReason }, () => {
   const { entries, raw } = readHostSlotCatalog(loaded.entryUrl);
@@ -101,7 +196,9 @@ test("宿主槽位目录：设置导航的两个槽位仍是 list / root / id �
 
     // `id` 仍是必填注册项 —— 插件给的就是 id（本插件用包名）。
     // 若宿主把它改成可选或改名，插件的注册对象会被判无效。
-    assert.match(entry.body, /name:\s*"id",\s*requirement:\s*"required"/u,
+    assert.match(entry.body, registrantField("name", "id"),
+      `槽位 "${slot}" 的注册项里没有 name=id；本插件的注册参数需要跟着改`);
+    assert.match(entry.body, registrantField("requirement", "required"),
       `槽位 "${slot}" 不再要求必填的 "id" 注册项；本插件的注册参数需要跟着改`);
   }
 

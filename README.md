@@ -73,7 +73,7 @@
 - **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
 - **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点；
   健康检查是**真探测**（TCP 连上游端口），不是标记位。
-- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 160 项 Node
+- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 161 项 Node
   检验；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
 
 ## 界面
@@ -189,13 +189,23 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer。两条都不写 = 任何版本都放行。
 
 > 升级 DSH 大版本时，先跑 `npm run test:host`：一条命令用**宿主自己的运行时**跑完
-> 四个套件（160 项，含下面两组需要宿主的契约检验）。宿主装在 `app.asar` 里时它会自动
+> 四个套件（161 项，含下面两组需要宿主的契约检验）。宿主装在 `app.asar` 里时它会自动
 > 用宿主自带的 Electron 当 node；找不到宿主时**返回 2 = 跳过**，不会把 skip 显示成通过。
 > 只想单独跑其中一组：`npm run test:manifest`（调用**宿主自己的**
 > `evaluatePluginCompatibility()` 判定本插件）、`npm run test:contract`（读**宿主随包分发的
 > 槽位目录**，逐个核对插件注册的槽位还在不在、形状变没变）。
 
-**已验证的宿主版本**：DSH **0.2.2-rc.1**（当前）与 **0.2.1-rc.5**（正式版 `DeepSeek Harness.app`）。
+**已验证的宿主版本**：DSH **0.2.2-rc.2**（当前）、**0.2.2-rc.1** 与 **0.2.1-rc.5**。
+
+宿主 0.2.2-rc.1 → **0.2.2-rc.2** 的差异只有下表四行，其中**唯一真正影响本仓库**的一项是
+我们的检验读不懂宿主的**新产物格式** —— 插件运行期代码一行没改：
+
+| 宿主 rc.2 改了什么 | 与本插件的关系 |
+| :--- | :--- |
+| 客户端槽位目录产物重新压平，引号从双引号换成模板字面量（`` key:`settings.section`,kind:`list`,scope:`root` ``） | **目录内容一字未变**（109 → 114 个槽位，只新增 5 个会话侧槽位；`settings.section` / `settings.section.icon` 仍是 `list` / `root` / `id` 必填）。但 `test/host-contract.test.mjs` 的解析正则只认双引号 → 解析出 0 条 → 三条契约检验一起变红。1.1.2 已把解析改成**只认字段名与顺序、不认引号种类** |
+| 新增 5 个槽位：`conversation.chat.markdown.fence`、`conversation.hero.frame`、`conversation.input.model.options`、`conversation.session.header.actions.subagent.footer`、`settings.launcher.notifications` | 不涉及：本插件只注册设置页那两个槽位 |
+| `@deepseek-ai/dsh-cua-bundle` 进入依赖、`experimental-agent-team-profile` 移出 | 不涉及：与 Web 设置页无关 |
+| cordis 4.1.0 / schemastery 3.19.0 的取值未变 | 已覆盖：宿主仍在本插件声明的区间内，Config schema 照常投影 |
 
 宿主 rc.5 → 0.2.2-rc.1 的破坏性变更都落在**插件作者才碰的层面**，本插件一处没用到
 （宿主不随包发 changelog，下表来自 npm 同版本构件逐文件 diff + 实时 inspect）：
@@ -218,13 +228,14 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 本插件依赖的接口逐项复核，全部未变：
 
-| 插件用到的 | rc.5 现状 |
+| 插件用到的 | rc.5 之后的现状（0.2.2-rc.2 实测） |
 | :--- | :--- |
 | `settings.section` / `settings.section.icon` 槽位 | 仍是 `list` / `root` / `id` 必填；图标的 id 必须等于页面的 id（1.1.0 起用它们） |
-| `webServer.register({kind:'prefix', path, handler})` | 未变（`dsh-host-webserver` 的路由契约一致） |
-| `Config`（schemastery `z.object` + `volatile()`） | 未变；宿主随包分发的 schemastery 3.18.5 在插件区间内 |
+| `webServer.register({kind:'prefix', path, handler})` | 未变（`/service-portal/api/status` 实测 200，`running: true`） |
+| `Config`（schemastery `z.object` + `volatile()`） | 未变；宿主随包分发的 schemastery 3.19.0 / cordis 4.1.0 在插件区间内 |
 | `dsh.client` 清单字段（`platform: web` + `exports["./client"]`） | 未变 |
-| `engines.dsh` 版本门禁 | 未变（rc.5 判定本插件相容，profile 级兼容检查亦无告警） |
+| `engines.dsh` 版本门禁 | 未变（`>=0.2.1-rc.5 <0.3.0-0` 判 0.2.2-rc.2 相容，profile 级兼容检查亦无告警） |
+| 主题令牌（`button-primary-fill`、`label-primary-foreground` 等） | 未变：插件用到的 32 个 `--dsw-*` 令牌全部仍在宿主主题产物里（插件侧本来每条都带兜底） |
 
 宿主 rc.4 的那组改动值得单独记一笔，因为它是一种**新的失败形态**：
 ACP 运行线把 **stdout 留给 JSON-RPC 协议**，任何 `console.log` 都会插进协议流，
@@ -233,10 +244,10 @@ ACP 运行线把 **stdout 留给 JSON-RPC 协议**，任何 `console.log` 都会
 但从 1.0.8 起有检验把它钉住 —— 不再依赖"当时写对了"。
 
 ```bash
-# 一条命令跑完四个套件（160/160，0 skip）。它会自动定位宿主；找不到时返回 2（跳过）。
+# 一条命令跑完四个套件（161/161，0 skip）。它会自动定位宿主；找不到时返回 2（跳过）。
 npm run test:host
 
-# 等价的手工写法（0.2.2-rc.1 实测 23/23 通过）：
+# 等价的手工写法（0.2.2-rc.2 实测 23/23 通过）：
 # 注意：宿主装在 app.asar 里，普通 node 读不到 —— 用宿主自带的 Electron 当 node 用。
 APP="/Applications/DeepSeek Harness.app/Contents/Resources"
 DSH_APP_BOOT="$APP/app.asar/dsh/node_modules/@deepseek-ai/dsh-app-boot" \
@@ -447,7 +458,7 @@ npm run test:host
 & $node --test test/host.test.mjs         # 91 项宿主端控制检验
 & $node --test test/client.test.mjs       # 46 项客户端分发契约检验
 & $node --test test/manifest.test.mjs     # 14 项清单与版本门禁（需宿主运行时）
-& $node --test test/host-contract.test.mjs # 9 项宿主契约（槽位/stdout/依赖，需宿主运行时）
+& $node --test test/host-contract.test.mjs # 10 项宿主契约（槽位/stdout/依赖，需宿主运行时）
 
 # Python 控制检验
 python -X utf8 tools\check_portal_bind.py
@@ -551,7 +562,7 @@ npm run test:host
 & $node --test test/host.test.mjs         # 91 项宿主端控制检验
 & $node --test test/client.test.mjs       # 46 项客户端分发契约检验
 & $node --test test/manifest.test.mjs     # 14 项清单与版本门禁（需宿主运行时）
-& $node --test test/host-contract.test.mjs # 9 项宿主契约（槽位/stdout/依赖，需宿主运行时）
+& $node --test test/host-contract.test.mjs # 10 项宿主契约（槽位/stdout/依赖，需宿主运行时）
 
 # 端到端验收：真起门户进程，逐条验证「内网免密/外网口令/页面管理服务/限速/健康检查」
 python -X utf8 test\acceptance_portal.py    # 30 项

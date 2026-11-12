@@ -19,7 +19,7 @@ cd D:/DshProject/dsh-service-portal
 $node = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
 & $node client/build.mjs            # 重建客户端产物
 
-# 四个 Node 套件一条命令跑完（160 项，含宿主清单门禁 + 槽位/依赖契约）。
+# 四个 Node 套件一条命令跑完（161 项，含宿主清单门禁 + 槽位/依赖契约）。
 # 宿主在 app.asar 里时，它会自动用宿主自带的 Electron 当 node 跑；
 # 找不到宿主时返回 2（跳过）—— 看到 2 就别发布，先把宿主路径指定好。
 npm run test:host

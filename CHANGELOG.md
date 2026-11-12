@@ -1,5 +1,72 @@
 # Changelog
 
+## 1.1.2 (2026-11-12)
+
+**跟随宿主升级：DSH 0.2.2-rc.1 → 0.2.2-rc.2。插件运行期代码零改动；红的是「我们读宿主的方式」。**
+
+宿主升到 **0.2.2-rc.2**。这一版同样没有随包发布 changelog（`docs/upgrade-guide/` 里最新的
+仍是 `v0.2.2-rc.1/`，19 个条目全部与「从 rc.1 升到 rc.2」无关），所以核对方式是：
+对 npm 上 rc.1 与 rc.2 的官方 tarball 逐文件 diff，再用实时 inspect 复核运行时。
+
+### Fixes
+
+**`test/host-contract.test.mjs` 的槽位目录解析不再依赖引号种类。**
+
+宿主 0.2.2-rc.2 把客户端槽位目录的产物**重新压平**，引号从双引号换成模板字面量：
+
+```js
+// ≤0.2.2-rc.1：源码缩进原样保留
+key: "settings.section",\n\t\t\t\tkind: "list",\n\t\t\t\tscope: "root"
+// 0.2.2-rc.2 起：压平
+key:`settings.section`,kind:`list`,scope:`root`
+```
+
+**目录内容一个字都没变**（109 → 114 个槽位，只多了 5 个会话侧槽位），但旧正则只认双引号
+→ 解析出 **0 条** → 三条契约检验一起变红，失败信息是「宿主不再声明槽位 `settings.section`」，
+读起来跟「宿主删了槽位」一模一样。**这不是插件坏了，是解析器坏了。**
+
+改法：正则只认**字段名与顺序**，引号收进字符类 `(["'`])` 并用反向引用要求开闭一致
+（`key: "a", kind: 'list, scope: "root"` 这种残片照样被拒）。注册项的 `name` / `requirement`
+两个断言同样换成不认引号的匹配式。
+
+新增**不依赖宿主**的解析器检验（任何环境都跑，普通 node 下也不 skip）：把宿主两种真实产物
+形态各钉一份样本，断言都能解析出 `kind` / `scope` / `name: id` / `requirement: required`，
+并配两条反例（缺 `scope` 的片段、引号不成对的残片）。
+
+> 为什么这条检验必须存在：这次红的三个用例**在 CI 上根本不会红** —— 它们需要宿主运行时，
+> 拿到不到就 skip。所以「解析器自己坏掉」这类失败只能靠不依赖宿主的用例兜住。
+
+### 复核：插件依赖的宿主接口一个没变
+
+| 插件用到的 | 0.2.2-rc.2 实测 |
+| :--- | :--- |
+| `settings.section` / `settings.section.icon` 槽位 | 仍是 `list` / `root` / `id` 必填；图标 id 仍必须等于页面 id。`occupants` 里 `registrant: dsh-service-portal`、`order: 35`、`active: true` |
+| `webServer.register({ kind: 'prefix', path, handler })` | 未变：`GET /service-portal/api/status` 返回 200 且 `running: true` |
+| `Config`（schemastery `z.object` + `volatile()`） | 未变：宿主 `listConfigs` 仍投影出本插件的 schema |
+| `engines.dsh` 门禁 | 未变：`>=0.2.1-rc.5 <0.3.0-0` 判 0.2.2-rc.2 相容；门禁 23/23 |
+| cordis / schemastery 取值 | 未变：宿主仍是 `~4.1.0` / `~3.19.0`（实测 4.1.0 / 3.19.0），两个都在插件声明区间内 |
+| 主题令牌 | 未变：插件用到的 32 个 `--dsw-*` 全部仍在宿主主题产物里（插件侧本来每条都带兜底） |
+| 升级指南 | rc.2 未新增任何 `v0.2.2-rc.2/` 目录；rc.1 那 19 个条目本插件一个都不涉及（账号通知、Forge、CUA、终端 bundle、窗口拖拽区域、plugin-manager 的 `BundleInfo.update` 等） |
+
+新增的 5 个槽位（`conversation.chat.markdown.fence`、`conversation.hero.frame`、
+`conversation.input.model.options`、`conversation.session.header.actions.subagent.footer`、
+`settings.launcher.notifications`）本插件一个都不注册，不受影响。
+`@deepseek-ai/dsh-cua-bundle` 进入宿主依赖、`experimental-agent-team-profile` 移出，
+同样与 Web 设置页无关。
+
+### Tests
+
+- `npm run test:host`：**161/161，0 跳过**（原 160 项 + 新增 1 项解析器检验），
+  其中宿主门禁与契约 23/23。改前实测：**157 通过 / 3 失败 / 0 跳过**。
+- `npm run test:contract`（普通 node，无宿主）：4 通过 / 6 跳过 —— 新增那条解析器检验
+  在没有宿主时**照样通过**，其余需要宿主项明确 skip。
+
+### Docs
+
+- README「兼容的 DSH 版本」：已验证版本补上 0.2.2-rc.2，新增 rc.1 → rc.2 变更对照表；
+  用例数 160 → 161、host-contract 9 → 10 项改正。
+- README.en.md 同步「Verified against」与用例数；RELEASING.md 第 1 步用例数改正。
+
 ## 1.1.1 (2026-11-09)
 
 **修一个 CI 在 Windows 上暴露的真实竞态**：门户「端口开始监听」与「状态文件写出来」

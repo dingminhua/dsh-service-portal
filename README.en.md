@@ -315,9 +315,9 @@ Marketplace cards and README badges are two separate mechanisms:
   This is a deliberate trade-off (scan-and-go convenience) and the UI states it plainly.
 - **Node >= 24 and host API version**: the plugin needs DSH's `webServer` / `settings` capabilities.
   When a host lacks them the plugin fails closed (mounts no routes) instead of half-working.
-  Verified against DSH **0.2.2-rc.1** (current) and **0.2.1-rc.5**; `npm run test:host` runs the
-  four suites (160 tests) against the installed host runtime in one command — it locates the
-  host automatically, uses its bundled Electron when the host lives inside `app.asar`, and
+  Verified against DSH **0.2.2-rc.2** (current), **0.2.2-rc.1** and **0.2.1-rc.5**; `npm run test:host`
+  runs the four suites (161 tests) against the installed host runtime in one command — it locates
+  the host automatically, uses its bundled Electron when the host lives inside `app.asar`, and
   **exits 2 (skip)** instead of passing when no host can be found. The individual gates remain
   available as `npm run test:manifest` and `npm run test:contract`.
 - **The host silently skips the plugin after an upgrade**: the host only loads bundles listed in
