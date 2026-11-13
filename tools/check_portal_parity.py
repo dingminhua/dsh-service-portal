@@ -321,8 +321,9 @@ def main():
     # 两条入口栏 + 二维码」，插件详情页那一角装不下、入口也太深。
     # 与兄弟插件 dsh-subagent-default-model 2.2.0 走的是同一条路。
     #
-    # 实测（cordis_inspect Slots，宿主 0.2.2-rc.2；rc.1 与 rc.2 的槽位目录
-    # 内容一致，rc.2 只多了 5 个会话侧槽位）：
+    # 实测（cordis_inspect Slots，宿主 0.2.2-rc.3；rc.2 → rc.3 的槽位目录
+    # 114 → 116，新增的 2 个是 sidebar.session.action / workspace.picker.directoryFlow，
+    # 都在会话侧，与设置导航无关）：
     #   `settings.section` 是 list / root，注册项 id/order/label，
     #   occupants 里已有 account -10 / general 0 / models 10 / plugins 15 /
     #   agent-presets 20 / opencode-go 20 / dsh-subagent-default-model 30 /

@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.1.3 (2026-11-14)
+
+**跟随宿主升级：DSH 0.2.2-rc.2 → 0.2.2-rc.3。插件运行期代码、清单、补丁零改动；
+这一版只改文档与版本号。**
+
+宿主升到 **0.2.2-rc.3**。这一版同样没有随包发布 changelog（`docs/upgrade-guide/` 里最新的
+仍是 `v0.2.2-rc.1/`，19 个条目全部与「从 rc.2 升到 rc.3」无关），所以核对方式与前两版相同：
+对 npm 上 rc.2 与 rc.3 的官方 tarball 逐文件 diff，再用实时 inspect 复核运行时。
+
+### 核对结论：rc.3 没有触及本插件的任何接口
+
+CLI 包的 `lib/` 与 `src/` **逐字节相同**，`package.json` 的变化只是把 88 个
+`@deepseek-ai/dsh-*` 依赖钉到 rc.3，外加新增一个包：
+
+| 宿主 rc.3 改了什么 | 与本插件的关系 |
+| :--- | :--- |
+| 新增 `@deepseek-ai/dsh-deepseek-chat-import`（可选的 DeepSeek 对话导出导入器） | **不涉及**：它挂在 `sidebar.session.action` 槽位上，且不在本机 profile 的 `dsh.profile.bundles` 名单里 —— 未加载、未占路由。它的上传路由是 `/api/deepseek-chat-import/archive`，与本插件的 `/service-portal/api` 前缀无交集 |
+| 客户端槽位目录 114 → **116**（产物 108 → 110）：新增 `sidebar.session.action`（`hoc` / `root`，新会话行的 HOC 层）、`workspace.picker.directoryFlow`（`single` / `root`，工作区选择器的选目录洞） | **不涉及**：本插件只注册 `settings.section` 与 `settings.section.icon`，两个都仍是 `list` / `root` / `id` 必填 |
+| `dsh-client-ui-sidebar` / `dsh-client-ui-workspace` 为新槽位改了源码 | **不涉及**：本插件不 import 这两个包的运行时，只用到宿主的槽位**名字**——已用宿主自己的槽位目录对过账 |
+| cordis 4.1.0 / schemastery 3.19.0 取值未变 | 已覆盖：仍在本插件声明的区间内，Config schema 照常投影 |
+
+### 复核：插件依赖的宿主接口一个没变（0.2.2-rc.3 实测）
+
+| 插件用到的 | 0.2.2-rc.3 实测 |
+| :--- | :--- |
+| `settings.section` / `settings.section.icon` 槽位 | 仍是 `list` / `root` / `id` 必填；`occupants` 里 `registrant: dsh-service-portal`、`order: 35`、`active: true` |
+| `webServer.register({ kind: 'prefix', path, handler })` | 未变：`GET /service-portal/api/status` 返回 200 且 `running: true` |
+| `Config`（schemastery `z.object` + `volatile()`） | 未变：宿主 `listConfigs` 仍投影出本插件的 schema |
+| `engines.dsh` 门禁 | 未变：`>=0.2.1-rc.5 <0.3.0-0` 判 0.2.2-rc.3 相容；门禁 23/23 |
+| 主题令牌 | 未变：`dsh-client-ui-theme` 除 `package.json` 外零改动，插件用到的 32 个 `--dsw-*` 全部仍在 |
+| 升级指南 | rc.3 未新增任何 `v0.2.2-rc.3/` 目录；rc.1 那 19 个条目本插件一个都不涉及 |
+
+### Tests
+
+- `npm run test:host`：**161/161，0 跳过**（其中宿主门禁与契约 23/23）。
+- 手工两套件（`manifest` + `host-contract`）在 rc.3 上 **24/24 通过**。
+- `npm run test:contract`（普通 node，无宿主）：4 通过 / 6 跳过 —— 与 1.1.2 一致。
+
+### Docs
+
+- README「兼容的 DSH 版本」：已验证版本补上 0.2.2-rc.3，新增 rc.2 → rc.3 变更对照表。
+- README.en.md 同步「Verified against」。
+- 三处计数改正：控制检验脚本 26 → **27**（`tools/check_*.py` 实际 27 个）、
+  `check_portal_parity.py` 项数 169 → **172**、README.en.md 的 Node 检验数 83 → **161**。
+- `tools/check_portal_parity.py` 的实测注释从 rc.2 更新到 rc.3（纯注释，不影响判定）。
+
+### Known issue（**不是本版引入**）
+
+`python3 tools/check_portal_parity.py` 仍报 **157/172（15 项 FAIL）**。这 15 项在 1.0.9 的
+提交上重跑，失败集合**完全一致** —— 是检验本身过期，不是产品坏了：
+
+- 14 项把 `--dsw-alias-label-tertiary`、`--dsw-alias-button-primary-fill`、`--dsw-alias-border-l3`
+  等判成「假令牌」，但它们**全部真实存在**于宿主的 `design-platform.css`；脚本里的
+  `real_alias_tokens` 白名单只收了 14 个旧令牌，已经跟不上宿主主题。
+- 1 项（placeholder）要求字面出现 `label-secondary`，而源码写的是
+  `var(--dsp-t2)`，`--dsp-t2` 就指向 `label-secondary` —— 判据太死板。
+
+本版不动它（属于另一件事），留作后续单独处理。
+
 ## 1.1.2 (2026-11-12)
 
 **跟随宿主升级：DSH 0.2.2-rc.1 → 0.2.2-rc.2。插件运行期代码零改动；红的是「我们读宿主的方式」。**

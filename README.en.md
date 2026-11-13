@@ -41,7 +41,7 @@ portal itself has nothing to do with poker — **any local service** can use the
   (`https://<random>/train/`).
 - **Manifest-driven** — write `services.json` to expose any service without touching code; an empty
   manifest falls back to the built-in default (ld-rl-poker's two GUIs, backwards compatible).
-- **Control checks** (house rule) — 26 Python control-check scripts plus 8 end-to-end scripts, and 83
+- **Control checks** (house rule) — 27 Python control-check scripts plus 8 end-to-end scripts, and 161
   Node checks; **a missing dependency must "skip and return 2", never silently pass**.
 - **Host metrics** — CPU / memory / VRAM / GPU utilization; unreadable values render "—", never a fake 0.
 
@@ -315,7 +315,7 @@ Marketplace cards and README badges are two separate mechanisms:
   This is a deliberate trade-off (scan-and-go convenience) and the UI states it plainly.
 - **Node >= 24 and host API version**: the plugin needs DSH's `webServer` / `settings` capabilities.
   When a host lacks them the plugin fails closed (mounts no routes) instead of half-working.
-  Verified against DSH **0.2.2-rc.2** (current), **0.2.2-rc.1** and **0.2.1-rc.5**; `npm run test:host`
+  Verified against DSH **0.2.2-rc.3** (current), **0.2.2-rc.2**, **0.2.2-rc.1** and **0.2.1-rc.5**; `npm run test:host`
   runs the four suites (161 tests) against the installed host runtime in one command — it locates
   the host automatically, uses its bundled Electron when the host lives inside `app.asar`, and
   **exits 2 (skip)** instead of passing when no host can be found. The individual gates remain

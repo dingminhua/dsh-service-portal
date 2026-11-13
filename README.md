@@ -73,7 +73,7 @@
 - **登录限速** —— 单 IP 连续失败 5 次锁 60 秒，另有全局阈值防分布式撞码。
 - **服务状态一目了然** —— 每个服务显示 已启用/未启用/存活探测失败，未启用的不可点；
   健康检查是**真探测**（TCP 连上游端口），不是标记位。
-- **控制检验**（本仓库硬纪律）—— 26 个 Python 控制检验脚本 + 8 个端到端脚本 + 161 项 Node
+- **控制检验**（本仓库硬纪律）—— 27 个 Python 控制检验脚本 + 8 个端到端脚本 + 161 项 Node
   检验；**依赖缺失必须「跳过并返回 2」，不得静默通过**。
 
 ## 界面
@@ -195,7 +195,16 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 > `evaluatePluginCompatibility()` 判定本插件）、`npm run test:contract`（读**宿主随包分发的
 > 槽位目录**，逐个核对插件注册的槽位还在不在、形状变没变）。
 
-**已验证的宿主版本**：DSH **0.2.2-rc.2**（当前）、**0.2.2-rc.1** 与 **0.2.1-rc.5**。
+**已验证的宿主版本**：DSH **0.2.2-rc.3**（当前）、**0.2.2-rc.2**、**0.2.2-rc.1** 与 **0.2.1-rc.5**。
+
+宿主 0.2.2-rc.2 → **0.2.2-rc.3** 的差异只有下表三行，**没有一项触及本插件** ——
+插件运行期代码、清单、补丁在这一版里一行没改：
+
+| 宿主 rc.3 改了什么 | 与本插件的关系 |
+| :--- | :--- |
+| 新增 `@deepseek-ai/dsh-deepseek-chat-import`（可选的 DeepSeek 对话导出导入器） | **不涉及**：它挂在 `sidebar.session.action` 槽位上，且不在本机 profile 的 `dsh.profile.bundles` 名单里 —— 未加载。它的上传路由 `/api/deepseek-chat-import/archive` 与本插件的 `/service-portal/api` 前缀无交集 |
+| 客户端槽位目录 114 → **116**（产物 108 → 110）：新增 `sidebar.session.action`（`hoc` / `root`）、`workspace.picker.directoryFlow`（`single` / `root`） | **不涉及**：本插件只注册设置页那两个槽位，两者仍是 `list` / `root` / `id` 必填 |
+| CLI 的 `lib/` 与 `src/` 逐字节相同；`package.json` 只是把 88 个 `@deepseek-ai/dsh-*` 钉到 rc.3 | 已覆盖：cordis 4.1.0 / schemastery 3.19.0 取值未变，门禁 23/23 |
 
 宿主 0.2.2-rc.1 → **0.2.2-rc.2** 的差异只有下表四行，其中**唯一真正影响本仓库**的一项是
 我们的检验读不懂宿主的**新产物格式** —— 插件运行期代码一行没改：
@@ -228,13 +237,13 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 本插件依赖的接口逐项复核，全部未变：
 
-| 插件用到的 | rc.5 之后的现状（0.2.2-rc.2 实测） |
+| 插件用到的 | rc.5 之后的现状（0.2.2-rc.3 实测） |
 | :--- | :--- |
 | `settings.section` / `settings.section.icon` 槽位 | 仍是 `list` / `root` / `id` 必填；图标的 id 必须等于页面的 id（1.1.0 起用它们） |
 | `webServer.register({kind:'prefix', path, handler})` | 未变（`/service-portal/api/status` 实测 200，`running: true`） |
 | `Config`（schemastery `z.object` + `volatile()`） | 未变；宿主随包分发的 schemastery 3.19.0 / cordis 4.1.0 在插件区间内 |
 | `dsh.client` 清单字段（`platform: web` + `exports["./client"]`） | 未变 |
-| `engines.dsh` 版本门禁 | 未变（`>=0.2.1-rc.5 <0.3.0-0` 判 0.2.2-rc.2 相容，profile 级兼容检查亦无告警） |
+| `engines.dsh` 版本门禁 | 未变（`>=0.2.1-rc.5 <0.3.0-0` 判 0.2.2-rc.3 相容，profile 级兼容检查亦无告警） |
 | 主题令牌（`button-primary-fill`、`label-primary-foreground` 等） | 未变：插件用到的 32 个 `--dsw-*` 令牌全部仍在宿主主题产物里（插件侧本来每条都带兜底） |
 
 宿主 rc.4 的那组改动值得单独记一笔，因为它是一种**新的失败形态**：
@@ -247,7 +256,7 @@ ACP 运行线把 **stdout 留给 JSON-RPC 协议**，任何 `console.log` 都会
 # 一条命令跑完四个套件（161/161，0 skip）。它会自动定位宿主；找不到时返回 2（跳过）。
 npm run test:host
 
-# 等价的手工写法（0.2.2-rc.2 实测 23/23 通过）：
+# 等价的手工写法（0.2.2-rc.3 实测 24/24 通过）：
 # 注意：宿主装在 app.asar 里，普通 node 读不到 —— 用宿主自带的 Electron 当 node 用。
 APP="/Applications/DeepSeek Harness.app/Contents/Resources"
 DSH_APP_BOOT="$APP/app.asar/dsh/node_modules/@deepseek-ai/dsh-app-boot" \
@@ -401,7 +410,7 @@ python -X utf8 tools/portal_run.py --status / --stop
 
 | 检查 | 项数 | 拦的 bug |
 | :--- | ---: | :--- |
-| `tools/check_portal_parity.py` | 169 | 设置页三处对标：缺右上角求 Star 区块、局域网口令与公网共用、**「自动选地址」只是显示不生效**；未启动状态逻辑；排版（字号刻度、只引用真实主题令牌、动作与说明分层、警示块去重）；公网密码自定义与警告提示；**节点开关必须是"路由闸门"而不是启停上游**、门户页只读无管理入口；节点卡片的内网/公网两个访问入口各自判断开关 |
+| `tools/check_portal_parity.py` | 172 | 设置页三处对标：缺右上角求 Star 区块、局域网口令与公网共用、**「自动选地址」只是显示不生效**；未启动状态逻辑；排版（字号刻度、只引用真实主题令牌、动作与说明分层、警示块去重）；公网密码自定义与警告提示；**节点开关必须是"路由闸门"而不是启停上游**、门户页只读无管理入口；节点卡片的内网/公网两个访问入口各自判断开关 |
 | `tools/check_portal_stop_scope.py` | 13 | **`--stop` 顺手杀掉同端口上别人的进程**（用户正在跑的门户被检验脚本干掉）；停止后口令/候选被整份删掉 |
 | `tools/check_portal_shutdown.py` | 6 | 门户自退接口：局域网/公网来源必须被拒（不能从手机把门户关掉）、GET 不生效、**端口松了进程没退** |
 | `tools/check_plugin_stop.py` | 6 | 设置页「停止门户」真能停：**宿主派生进程杀不掉门户却报成功**（沙箱/作业隔离），改走"请门户自己退" |
